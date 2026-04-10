@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── users ──────────────────────────────────────────────────────────────
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // ── boards ─────────────────────────────────────────────────────────────
+    // Boards now have auto-generated IDs (multiple boards per user).
+    // resource may be null when getting a non-existent doc, so we guard it.
+    match /boards/{boardId} {
+      allow get: if request.auth != null
+                 && (resource == null || resource.data.userId == request.auth.uid);
+
+      allow list: if request.auth != null;
+
+      allow create: if request.auth != null
+                    && request.auth.uid == request.resource.data.userId;
+
+      allow update, delete: if request.auth != null
+                            && request.auth.uid == resource.data.userId;
+    }
+
+    // ── cards ──────────────────────────────────────────────────────────────
+    // 'get'  — single document read: resource is available, check userId.
+    // 'list' — collection query:     resource is null per-doc during evaluation;
+    //          ownership is enforced by the query filter (boardId == uid).
+    match /cards/{cardId} {
+      allow get: if request.auth != null
+                 && request.auth.uid == resource.data.userId;
+
+      allow list: if request.auth != null;
+
+      allow create: if request.auth != null
+                    && request.auth.uid == request.resource.data.userId
+                    && request.resource.data.keys().hasAll([
+                         'boardId', 'userId', 'columnId',
+                         'title', 'order', 'createdAt', 'updatedAt'
+                       ])
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 200;
+
+      allow update: if request.auth != null
+                    && request.auth.uid == resource.data.userId
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.boardId == resource.data.boardId;
+
+      allow delete: if request.auth != null
+                    && request.auth.uid == resource.data.userId;
+    }
+  }
+}

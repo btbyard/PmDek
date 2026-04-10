@@ -1,0 +1,40 @@
+/* PMDek — global styles
+ *
+ * Tailwind base + component + utility layers are injected by the
+ * Tailwind PostCSS plugin during the Vite build.
+ *
+ * Custom component classes live here when they're too verbose to inline
+ * or are reused more than once across templates.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base resets ──────────────────────────────────────────────────────────── */
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  *:focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2;
+  }
+}
+
+/* ── Custom components ────────────────────────────────────────────────────── */
+@layer components {
+  /* Sign-in button shared base */
+  .btn-signin {
+    @apply flex items-center justify-center gap-3 w-full px-4 py-3
+           rounded-xl border border-gray-200 bg-white text-sm font-medium
+           text-gray-700 shadow-sm hover:bg-gray-50 transition-colors;
+  }
+}
+
+/* ── Drag-over column highlight ──────────────────────────────────────────── */
+.card-list.drag-over {
+  /* Tailwind classes are applied via JS; this reinforces the transition */
+  transition: background-color 0.15s, box-shadow 0.15s;
+}

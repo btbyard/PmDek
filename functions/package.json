@@ -1,0 +1,22 @@
+{
+  "name": "pmdek-functions",
+  "version": "0.1.0",
+  "description": "PMDek Firebase Cloud Functions — AI calls only",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions"
+  },
+  "dependencies": {
+    "@google/genai": "^1.49.0",
+    "@google/generative-ai": "^0.15.0",
+    "firebase-admin": "^12.2.0",
+    "firebase-functions": "^5.0.1"
+  },
+  "devDependencies": {
+    "firebase-functions-test": "^3.2.0"
+  }
+}
