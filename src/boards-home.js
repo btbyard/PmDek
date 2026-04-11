@@ -7,12 +7,15 @@
  * in the top-right that opens a rename modal. Clicking the card body opens the board.
  */
 
-import { getUserBoards, createBoard, renameBoard, deleteBoard } from './board.js';
+import { getUserBoards, createBoard, renameBoard, deleteBoard, DEFAULT_COLUMNS } from './board.js';
 import { generateBoard }                           from './ai.js';
 
 // Store the refresh callback so the rename modal can refresh the grid after saving.
 let _onBoardOpen = null;
 let _currentUser = null;
+let _lastBoards = [];
+const BOARDS_LOAD_TIMEOUT_MS = 7000;
+const BOARD_WRITE_TIMEOUT_MS = 7000;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -23,14 +26,36 @@ export async function renderBoardsHome(user, onBoardOpen) {
   const root = document.getElementById('boards-root');
   if (!root) return;
 
-  root.innerHTML = `
-    <div class="flex justify-center py-8">
-      <div class="w-6 h-6 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
-    </div>
-  `;
+  if (_lastBoards.length === 0) {
+    _lastBoards = _loadPersistedBoards(user.uid);
+  }
 
-  const boards = await getUserBoards(user.uid);
-  _renderTiles(root, boards);
+  if (_lastBoards.length > 0) {
+    _renderTiles(root, _lastBoards, { instant: true });
+  } else {
+    _renderLoadingTiles(root);
+  }
+
+  try {
+    const boards = await _withTimeout(
+      getUserBoards(user.uid),
+      BOARDS_LOAD_TIMEOUT_MS,
+      'Loading boards took too long.',
+    );
+    _lastBoards = boards;
+    _persistBoards(user.uid, boards);
+    _renderTiles(root, boards);
+  } catch (err) {
+    console.error('Load boards failed:', err);
+
+    if (_lastBoards.length > 0) {
+      _renderTiles(root, _lastBoards, { instant: true });
+      _renderBoardsNotice(root, 'Unable to refresh boards right now. Showing your last loaded boards.');
+      return;
+    }
+
+    _renderBoardsError(root);
+  }
 }
 
 export function openCreateBoardModal(user, onCreated) {
@@ -39,7 +64,7 @@ export function openCreateBoardModal(user, onCreated) {
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
-        <h3 class="text-lg font-semibold text-gray-800 mb-4">Create board</h3>
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Create Deck</h3>
         <form id="create-board-form" class="flex flex-col gap-4">
           <input id="board-title-input" type="text" placeholder="Board name"
             required maxlength="100"
@@ -50,7 +75,7 @@ export function openCreateBoardModal(user, onCreated) {
               Cancel
             </button>
             <button type="submit"
-              class="px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
+              class="gold-btn px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
               Create
             </button>
           </div>
@@ -68,6 +93,7 @@ export function openCreateBoardModal(user, onCreated) {
   modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) close();
   });
+  _bindModalSubmitKeys(form);
 
   let _submitting = false;
   form.addEventListener('submit', async (e) => {
@@ -79,11 +105,22 @@ export function openCreateBoardModal(user, onCreated) {
 
     const title = input.value.trim() || 'My Board';
     try {
-      const boardId = await createBoard(user, title);
+      const boardId = await _withTimeout(
+        createBoard(user, title),
+        BOARD_WRITE_TIMEOUT_MS,
+        'Creating the board took too long.',
+      );
+      const board = {
+        id: boardId,
+        title,
+        columns: DEFAULT_COLUMNS.map((col) => ({ ...col })),
+      };
+      _upsertCachedBoard(board);
+      _persistCurrentBoards();
       close();
-      onCreated(boardId, title);
+      onCreated(boardId, board);
     } catch (err) {
-      console.error('Create board failed:', err);
+      console.error('Create deck failed:', err);
       _submitting = false;
       if (submitBtn) submitBtn.disabled = false;
     }
@@ -128,7 +165,7 @@ export function openAiBoardModal(user, onCreated) {
               Cancel
             </button>
             <button type="submit" id="ai-board-submit"
-              class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white
+              class="gold-btn flex items-center gap-2 px-4 py-2 text-sm font-medium text-white
                      bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
               <span class="text-base leading-none">✨</span>
               Do it for me Gemini
@@ -150,6 +187,7 @@ export function openAiBoardModal(user, onCreated) {
   modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) close();
   });
+  _bindModalSubmitKeys(form);
 
   let _submitting = false;
   form.addEventListener('submit', async (e) => {
@@ -164,7 +202,13 @@ export function openAiBoardModal(user, onCreated) {
     try {
       const { title, columns } = await generateBoard(prompt);
       const boardObj = { title, columns };
-      const boardId  = await createBoard(user, title, columns);
+      const boardId  = await _withTimeout(
+        createBoard(user, title, columns),
+        BOARD_WRITE_TIMEOUT_MS,
+        'Creating the AI board took too long.',
+      );
+      _upsertCachedBoard({ id: boardId, ...boardObj });
+      _persistCurrentBoards();
       close();
       onCreated(boardId, { id: boardId, ...boardObj });
     } catch (err) {
@@ -178,7 +222,7 @@ export function openAiBoardModal(user, onCreated) {
 
 // ─── Private rendering ────────────────────────────────────────────────────────
 
-function _renderTiles(root, boards) {
+function _renderTiles(root, boards, { instant = false } = {}) {
   root.innerHTML = '';
 
   if (boards.length === 0) {
@@ -186,21 +230,66 @@ function _renderTiles(root, boards) {
       <div class="flex flex-col items-center justify-center py-20 text-center">
         <div class="text-5xl mb-4">📋</div>
         <p class="text-gray-500 text-sm">No boards yet.</p>
-        <p class="text-gray-400 text-sm">Click <strong>Create board</strong> to get started.</p>
+        <p class="text-gray-400 text-sm">Click <strong>Create Deck</strong> to get started.</p>
       </div>
     `;
     return;
   }
 
   const grid = document.createElement('div');
-  // Playing-card grid: fixed width cards, wrap naturally
-  grid.className = 'flex flex-wrap gap-5';
+  grid.className = 'boards-grid flex flex-wrap gap-12 justify-center';
 
-  boards.forEach((board) => {
-    grid.appendChild(_buildCard(board));
+  boards.forEach((board, index) => {
+    grid.appendChild(_buildCard(board, index, instant));
   });
 
   root.appendChild(grid);
+}
+
+function _renderLoadingTiles(root) {
+  const grid = document.createElement('div');
+  grid.className = 'boards-grid flex flex-wrap gap-12 justify-center';
+
+  for (let i = 0; i < 4; i += 1) {
+    const shell = document.createElement('div');
+    shell.className = 'board-tile-shell board-tile-shell-ready relative w-40 h-56 flex-shrink-0';
+    shell.style.setProperty('--tile-index', String(i));
+    shell.innerHTML = `
+      <div class="board-tile board-tile-loading w-full h-full rounded-[1.5rem] overflow-hidden">
+        <div class="board-tile-band h-16 w-full relative overflow-hidden">
+          <div class="board-tile-loading-shimmer"></div>
+        </div>
+        <div class="board-tile-body flex-1 p-3 pb-4 flex flex-col justify-end gap-2">
+          <div class="board-tile-loading-line w-12"></div>
+          <div class="board-tile-loading-line w-24"></div>
+          <div class="board-tile-loading-line w-20 opacity-70"></div>
+        </div>
+      </div>
+    `;
+    grid.appendChild(shell);
+  }
+
+  root.innerHTML = '';
+  root.appendChild(grid);
+}
+
+function _renderBoardsError(root) {
+  root.innerHTML = `
+    <div class="rounded-2xl border border-amber-200 bg-amber-50/80 px-5 py-4 text-sm text-amber-900">
+      <p class="font-medium">Boards failed to load.</p>
+      <p class="mt-1 text-amber-800">Check your Firebase connection, Auth session, or Firestore permissions and try again.</p>
+    </div>
+  `;
+}
+
+function _renderBoardsNotice(root, message) {
+  const existing = root.querySelector('.boards-root-notice');
+  if (existing) existing.remove();
+
+  const notice = document.createElement('div');
+  notice.className = 'boards-root-notice mb-4 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-900';
+  notice.textContent = message;
+  root.prepend(notice);
 }
 
 /**
@@ -215,48 +304,71 @@ function _renderTiles(root, boards) {
  *  │                  │
  *  └──────────────────┘
  */
-function _buildCard(board) {
+function _buildCard(board, index = 0, instant = false) {
   const wrapper = document.createElement('div');
   // Fixed playing-card proportions: 160px wide × 220px tall
-  wrapper.className = 'relative group w-40 h-56 flex-shrink-0';
+  wrapper.className = 'board-tile-shell relative group w-40 h-56 flex-shrink-0';
+  wrapper.style.setProperty('--tile-index', String(index));
+  if (instant) wrapper.classList.add('board-tile-shell-ready');
 
   const colCount = board.columns?.length ?? 3;
+
+  const backLayer1 = document.createElement('div');
+  backLayer1.className = 'board-tile-back board-tile-back-1';
+  backLayer1.setAttribute('aria-hidden', 'true');
+
+  const backLayer2 = document.createElement('div');
+  backLayer2.className = 'board-tile-back board-tile-back-2';
+  backLayer2.setAttribute('aria-hidden', 'true');
 
   // Clickable card body (opens board)
   const card = document.createElement('button');
   card.className = [
-    'w-full h-full flex flex-col bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden',
-    'hover:shadow-lg hover:-translate-y-1 hover:border-brand-400',
+    'board-tile relative w-full h-full flex flex-col rounded-[1.5rem] overflow-hidden',
+    'hover:-translate-y-1',
     'transition-all duration-150 text-left',
   ].join(' ');
   card.dataset.boardId = board.id;
   card.setAttribute('aria-label', `Open board: ${board.title}`);
 
   card.innerHTML = `
-    <!-- Top colour band — decorative, like a playing card suit marker -->
-    <div class="h-16 w-full bg-gradient-to-br from-brand-500 to-brand-700 flex-shrink-0 relative">
-      <!-- Card suit pattern dots -->
-      <div class="absolute inset-0 opacity-10"
-           style="background-image: radial-gradient(circle, white 1px, transparent 1px); background-size: 12px 12px;">
-      </div>
+    <!-- PM corner mark — top-left (playing card style) -->
+    <div class="board-tile-corner-top z-10 flex flex-col items-center gap-px" aria-hidden="true">
+      <span class="board-tile-mark" style="color:rgba(255,255,255,0.85)">PM</span><span style="font-size:0.6rem;color:rgba(255,255,255,0.7);line-height:1;margin-left:2px">&#9824;</span>
     </div>
-    <!-- Card body -->
-    <div class="flex-1 flex flex-col justify-end p-3 pb-4">
-      <h2 class="text-sm font-semibold text-gray-800 group-hover:text-brand-600 transition-colors line-clamp-2 leading-snug">
-        ${escapeHtml(board.title)}
-      </h2>
-      <p class="mt-1 text-xs text-gray-400">${colCount} column${colCount !== 1 ? 's' : ''}</p>
+    <!-- DEK corner mark — bottom-right, rotated 180° like a playing card -->
+    <div class="board-tile-corner-bottom z-10 flex flex-col items-center gap-px" aria-hidden="true">
+      <span class="board-tile-mark" style="color:rgba(255,255,255,0.85)">DEK</span><span style="font-size:0.6rem;color:rgba(255,255,255,0.7);line-height:1;margin-left:2px">&#9824;</span>
+    </div>
+    <!-- Top suit band -->
+    <div class="board-tile-band h-16 w-full flex-shrink-0 relative overflow-hidden">
+      <div class="board-tile-sheen"></div>
+
+    </div>
+    <div class="board-tile-body flex-1 flex flex-col justify-between p-3 pb-4">
+      <div>
+        <p class="board-tile-kicker">Project Deck</p>
+        <h2 class="board-tile-title text-sm font-semibold leading-snug">
+        ${escapeHtml(board.title || 'Untitled Deck')}
+        </h2>
+        <p class="mt-1 text-xs" style="color:rgba(255,255,255,0.72)">${colCount} Card${colCount !== 1 ? 's' : ''}</p>
+      </div>
     </div>
   `;
 
-  card.addEventListener('click', () => _onBoardOpen(board.id, board));
+  card.addEventListener('click', () => {
+    if (wrapper.dataset.opening === 'true') return;
+    wrapper.dataset.opening = 'true';
+    wrapper.classList.add('board-tile-shell-opening');
+    setTimeout(() => _onBoardOpen(board.id, board), 180);
+  });
 
   // Settings gear (top-right of card, absolutely positioned over the colour band)
   const gear = document.createElement('button');
   gear.className = [
     'absolute top-2 right-2 z-10',
     'w-6 h-6 flex items-center justify-center rounded-full',
-    'bg-white/20 hover:bg-white/40 text-white transition-colors',
+    'bg-white/10 hover:bg-white/20 text-white transition-colors border border-white/10 backdrop-blur-sm',
     'opacity-0 group-hover:opacity-100',
   ].join(' ');
   gear.setAttribute('aria-label', 'Board settings');
@@ -279,8 +391,17 @@ function _buildCard(board) {
     _openBoardSettingsMenu(e, board);
   });
 
+  wrapper.appendChild(backLayer2);
+  wrapper.appendChild(backLayer1);
   wrapper.appendChild(card);
   wrapper.appendChild(gear);
+
+  if (!instant) {
+    requestAnimationFrame(() => {
+      wrapper.classList.add('board-tile-shell-ready');
+    });
+  }
+
   return wrapper;
 }
 
@@ -373,7 +494,7 @@ function _openRenameBoardModal(board) {
               Cancel
             </button>
             <button type="submit"
-              class="px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
+              class="gold-btn px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
               Save
             </button>
           </div>
@@ -392,6 +513,7 @@ function _openRenameBoardModal(board) {
   modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) close();
   });
+  _bindModalSubmitKeys(form);
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -399,6 +521,8 @@ function _openRenameBoardModal(board) {
     if (!newTitle) return;
     try {
       await renameBoard(board.id, newTitle);
+      _upsertCachedBoard({ ...board, title: newTitle });
+      _persistCurrentBoards();
       close();
       await renderBoardsHome(_currentUser, _onBoardOpen);
     } catch (err) {
@@ -455,6 +579,8 @@ function _openDeleteBoardModal(board) {
   document.getElementById('delete-board-confirm').addEventListener('click', async () => {
     try {
       await deleteBoard(board.id);
+      _removeCachedBoard(board.id);
+      _persistCurrentBoards();
       close();
       await renderBoardsHome(_currentUser, _onBoardOpen);
     } catch (err) {
@@ -472,5 +598,82 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function _upsertCachedBoard(board) {
+  const index = _lastBoards.findIndex((item) => item.id === board.id);
+  if (index === -1) {
+    _lastBoards = [..._lastBoards, board];
+    return;
+  }
+
+  _lastBoards = _lastBoards.map((item) => (item.id === board.id ? board : item));
+}
+
+function _removeCachedBoard(boardId) {
+  _lastBoards = _lastBoards.filter((board) => board.id !== boardId);
+}
+
+function _persistCurrentBoards() {
+  if (!_currentUser) return;
+  _persistBoards(_currentUser.uid, _lastBoards);
+}
+
+function _persistBoards(userId, boards) {
+  try {
+    const payload = boards.map((board) => ({
+      id: board.id,
+      title: board.title,
+      columns: Array.isArray(board.columns) ? board.columns : [],
+    }));
+    window.localStorage.setItem(_getBoardsStorageKey(userId), JSON.stringify(payload));
+  } catch {
+    // Ignore storage failures and continue with in-memory data.
+  }
+}
+
+function _loadPersistedBoards(userId) {
+  try {
+    const raw = window.localStorage.getItem(_getBoardsStorageKey(userId));
+    if (!raw) return [];
+
+    const boards = JSON.parse(raw);
+    if (!Array.isArray(boards)) return [];
+
+    return boards.filter((board) => board && typeof board.id === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function _getBoardsStorageKey(userId) {
+  return `pmdek:boards:${userId}`;
+}
+
+function _withTimeout(promise, timeoutMs, message) {
+  let timerId;
+
+  const timeoutPromise = new Promise((_, reject) => {
+    timerId = window.setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    window.clearTimeout(timerId);
+  });
+}
+
+function _bindModalSubmitKeys(form) {
+  form.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.defaultPrevented) return;
+
+    const target = e.target;
+    const isTextArea = target instanceof HTMLTextAreaElement;
+    if (isTextArea && e.shiftKey) return;
+
+    e.preventDefault();
+    form.requestSubmit();
+  });
 }
 

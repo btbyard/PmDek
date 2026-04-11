@@ -19,7 +19,7 @@ import {
   initAuth, signInWithGoogle, signInWithGitHub, signOutUser,
   signInWithEmail, registerWithEmail, resetPassword,
 } from './auth.js';
-import { renderBoard, setBoardId }                               from './board.js';
+import { renderBoard, setBoardId, createColumnBlock, resetColumnWidths } from './board.js';
 import { subscribeToCards, unsubscribeFromCards, initCardEvents } from './cards.js';
 import { openAiModal }                                           from './ai.js';
 import { renderBoardsHome, openCreateBoardModal, openAiBoardModal } from './boards-home.js';
@@ -31,6 +31,10 @@ let _user = null;
 
 // Tracks whether the email form is in sign-in or register mode.
 let _emailMode = 'signin'; // 'signin' | 'register'
+
+// Ordered list of boards for prev/next navigation.
+let _boardsList = [];
+let _currentBoardId = null;
 
 // ─── Auth lifecycle ───────────────────────────────────────────────────────────
 
@@ -51,7 +55,18 @@ initAuth(
 
 async function _showBoardsHome() {
   _showView('boards');
-  await renderBoardsHome(_user, _openBoard);
+  await renderBoardsHome(_user, (boardId, board) => {
+    // Capture the boards list at the time of click for navigation
+    _boardsList = _getLastBoards();
+    _openBoard(boardId, board);
+  });
+  _boardsList = _getLastBoards();
+}
+
+function _getLastBoards() {
+  // boards-home caches the list; grab it from the DOM tile order as fallback
+  const tiles = [...document.querySelectorAll('[data-board-id]')];
+  return tiles.map((t) => ({ id: t.dataset.boardId, title: t.querySelector('.board-tile-title')?.textContent?.trim() || '' }));
 }
 
 document.getElementById('create-board-btn')?.addEventListener('click', () => {
@@ -71,6 +86,10 @@ function _openBoard(boardId, board) {
     ? board
     : { id: boardId, title: board, columns: [] };
 
+  _currentBoardId = boardId;
+  // Refresh nav arrows
+  _updateDeckNavArrows();
+
   // Update the topbar board title
   const titleEl = document.getElementById('board-title-display');
   if (titleEl) titleEl.textContent = boardObj.title;
@@ -82,14 +101,103 @@ function _openBoard(boardId, board) {
   _showView('board');
 }
 
+function _updateDeckNavArrows() {
+  const idx      = _boardsList.findIndex((b) => b.id === _currentBoardId);
+  const prevBtn  = document.getElementById('deck-prev-btn');
+  const nextBtn  = document.getElementById('deck-next-btn');
+  if (prevBtn) prevBtn.disabled = idx <= 0;
+  if (nextBtn) nextBtn.disabled = idx < 0 || idx >= _boardsList.length - 1;
+}
+
 document.getElementById('back-to-boards-btn')?.addEventListener('click', () => {
   unsubscribeFromCards();
   _showBoardsHome();
 });
 
+document.getElementById('deck-prev-btn')?.addEventListener('click', () => {
+  const idx = _boardsList.findIndex((b) => b.id === _currentBoardId);
+  if (idx > 0) _openBoard(_boardsList[idx - 1].id, _boardsList[idx - 1]);
+});
+
+document.getElementById('deck-next-btn')?.addEventListener('click', () => {
+  const idx = _boardsList.findIndex((b) => b.id === _currentBoardId);
+  if (idx >= 0 && idx < _boardsList.length - 1) _openBoard(_boardsList[idx + 1].id, _boardsList[idx + 1]);
+});
+
 document.getElementById('ai-trigger-btn')?.addEventListener('click', () => {
   openAiModal('todo');
 });
+
+document.getElementById('reset-col-widths-btn')?.addEventListener('click', () => {
+  resetColumnWidths();
+});
+
+document.getElementById('create-card-top-btn')?.addEventListener('click', () => {
+  _openCreateBlockModal();
+});
+
+function _openCreateBlockModal() {
+  const modalRoot = document.getElementById('modal-root');
+  if (!modalRoot) return;
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Create block</h3>
+        <form id="create-block-form" class="flex flex-col gap-4">
+          <input id="block-title-input" type="text" placeholder="Block name"
+            required maxlength="50"
+            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          <div class="flex justify-end gap-2">
+            <button type="button" id="create-block-cancel"
+              class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
+              Cancel
+            </button>
+            <button type="submit"
+              class="gold-btn px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
+              Create block
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+
+  const form = document.getElementById('create-block-form');
+  const input = document.getElementById('block-title-input');
+  input.focus();
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('create-block-cancel').addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+  _bindModalSubmitKeys(form);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const title = input.value.trim() || 'New Column';
+    try {
+      await createColumnBlock(title);
+      close();
+    } catch (err) {
+      console.error('Create block failed:', err);
+    }
+  });
+}
+
+function _bindModalSubmitKeys(form) {
+  form.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.defaultPrevented) return;
+
+    const target = e.target;
+    const isTextArea = target instanceof HTMLTextAreaElement;
+    if (isTextArea && e.shiftKey) return;
+
+    e.preventDefault();
+    form.requestSubmit();
+  });
+}
 
 // ─── Sign-in / sign-out ───────────────────────────────────────────────────────
 
@@ -167,6 +275,9 @@ function _showView(name) {
     if (!el) return;
     if (key === name) {
       el.style.display = _viewDisplayMap[key];
+      el.classList.remove('view-entering');
+      void el.offsetWidth;
+      el.classList.add('view-entering');
     } else {
       el.style.display = 'none';
     }

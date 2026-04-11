@@ -61,7 +61,10 @@ function onDragStart(e) {
   };
 
   // Ghost image has a slight delay so the original card starts fading.
-  setTimeout(() => this.classList.add('opacity-40'), 0);
+  setTimeout(() => {
+    this.classList.add('opacity-40');
+    this.dataset.dndDragging = '1';
+  }, 0);
 
   e.dataTransfer.effectAllowed  = 'move';
   e.dataTransfer.setData('text/plain', dragging.cardId); // required for Firefox
@@ -70,6 +73,7 @@ function onDragStart(e) {
 /** @param {DragEvent} _e */
 function onDragEnd(_e) {
   this.classList.remove('opacity-40');
+  delete this.dataset.dndDragging;
   removeDragOver();
   dragging = null;
 }
@@ -80,7 +84,6 @@ function onDragOver(e) {
   e.dataTransfer.dropEffect = 'move';
 
   const list = e.currentTarget;
-  list.classList.add('drag-over', 'bg-brand-50', 'ring-2', 'ring-brand-200');
 
   // Show a drop indicator line before the card under the cursor
   clearDropIndicators();
@@ -97,7 +100,6 @@ function onDragOver(e) {
 function onDragLeave(e) {
   // Only clear if we actually left the list (not entered a child)
   if (!e.currentTarget.contains(e.relatedTarget)) {
-    e.currentTarget.classList.remove('drag-over', 'bg-brand-50', 'ring-2', 'ring-brand-200');
     clearDropIndicators();
   }
 }
@@ -168,7 +170,7 @@ function getDragAfterElement(container, y) {
 /** Creates the visual drop position indicator. */
 function createDropIndicator() {
   const el = document.createElement('div');
-  el.className = 'drop-indicator h-0.5 bg-brand-500 rounded mx-1 my-1';
+  el.className = 'drop-indicator relative z-10 h-0.5 bg-brand-500 rounded mx-1';
   return el;
 }
 
@@ -178,6 +180,6 @@ function clearDropIndicators() {
 
 function removeDragOver() {
   document.querySelectorAll('.card-list').forEach((l) => {
-    l.classList.remove('drag-over', 'bg-brand-50', 'ring-2', 'ring-brand-200');
+    l.classList.remove('drag-over');
   });
 }

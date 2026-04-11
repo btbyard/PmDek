@@ -125,6 +125,49 @@ export async function deleteBoard(boardId) {
   await deleteDoc(doc(db, 'boards', boardId));
 }
 
+/**
+ * Creates a new column block on the active board and persists it.
+ * Used by the top "Create Card" action (deck-level column creation).
+ *
+ * @param {string} [title='New Column']
+ * @returns {Promise<void>}
+ */
+export async function createColumnBlock(title = 'New Column') {
+  const boardId = getBoardId();
+  const rawTitle = (title || '').trim() || 'New Column';
+
+  const existingColumns = [...document.querySelectorAll('.column')].map((col, index) => {
+    const input = col.querySelector('.col-title-input');
+    return {
+      id: col.dataset.columnId,
+      title: input?.value?.trim() || input?.dataset?.original || `Column ${index + 1}`,
+      order: index,
+    };
+  });
+
+  const existingIds = new Set(existingColumns.map((col) => col.id));
+  let nextId = _slugifyColumnId(rawTitle);
+  let suffix = 2;
+  while (existingIds.has(nextId)) {
+    nextId = `${_slugifyColumnId(rawTitle)}-${suffix}`;
+    suffix += 1;
+  }
+
+  const nextColumns = [
+    ...existingColumns,
+    {
+      id: nextId,
+      title: rawTitle,
+      order: existingColumns.length,
+    },
+  ];
+
+  await saveColumns(boardId, nextColumns);
+
+  const boardTitle = document.getElementById('board-title-display')?.textContent?.trim() || 'Deck';
+  renderBoard({ id: boardId, title: boardTitle, columns: nextColumns });
+}
+
 // ─── DOM rendering ───────────────────────────────────────────────────────────
 
 /**
@@ -150,6 +193,25 @@ export function renderBoard(board) {
     columnsWrapper.appendChild(buildColumnEl(col, board.id, columns));
   });
 
+  // ── Add-column "+" button ────────────────────────────────────────────────
+  const addColBtn = document.createElement('button');
+  addColBtn.className = [
+    'add-column-btn flex-shrink-0 self-start w-10 h-10 mt-1',
+    'flex items-center justify-center rounded-full',
+    'border-2 border-dashed border-brand-500/40 hover:border-brand-400',
+    'text-brand-500/60 hover:text-brand-400',
+    'bg-transparent hover:bg-brand-500/10',
+    'transition-all duration-150',
+  ].join(' ');
+  addColBtn.title = 'Add column';
+  addColBtn.innerHTML = `
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+    </svg>
+  `;
+  addColBtn.addEventListener('click', () => createColumnBlock());
+  columnsWrapper.appendChild(addColBtn);
+
   boardRoot.appendChild(columnsWrapper);
   _initColumnDrag(board.id, columns);
 }
@@ -164,33 +226,49 @@ export function renderBoard(board) {
  */
 function buildColumnEl(col, boardId, allColumns) {
   const el = document.createElement('div');
-  el.className        = 'column flex flex-col w-72 flex-shrink-0 bg-gray-100 rounded-xl p-3';
+  el.className        = [
+    'column relative flex flex-col w-72 flex-shrink-0 rounded-xl p-3',
+    'bg-gradient-to-br from-[#17181c] via-[#0b0c0e] to-[#050506]',
+    'border border-white/10 shadow-[0_14px_30px_rgba(0,0,0,0.28)]',
+  ].join(' ');
   el.dataset.columnId = col.id;
   el.draggable        = true;   // columns are drag-reorderable
 
   el.innerHTML = `
     <div class="col-header flex items-center gap-1 mb-3">
       <input
-        class="col-title-input flex-1 text-sm font-semibold text-gray-600 uppercase tracking-wide
-               bg-transparent border-none outline-none focus:bg-white focus:rounded focus:px-1
+        class="col-title-input min-w-0 flex-1 text-sm font-semibold text-white/90 uppercase tracking-wide
+               bg-transparent border-none outline-none rounded px-1 -mx-1
+               focus:bg-black/30 focus:text-white
                focus:ring-1 focus:ring-brand-400 transition-all cursor-pointer"
         value="${escapeHtml(col.title)}"
         maxlength="50"
         aria-label="Column title"
         data-original="${escapeHtml(col.title)}"
       />
-      <span class="card-count text-xs text-gray-400 font-medium ml-auto flex-shrink-0">0</span>
+      <span class="card-count text-xs text-white/50 font-medium ml-auto flex-shrink-0">0</span>
+      <button
+        class="delete-col-btn flex-shrink-0 w-5 h-5 flex items-center justify-center rounded
+               text-white/20 hover:text-red-300 hover:bg-red-500/10 transition-colors opacity-0"
+        data-column-id="${col.id}"
+        title="Delete column"
+      >
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
     </div>
     <div class="card-list flex flex-col gap-2 min-h-[2rem]" data-column-id="${col.id}"></div>
     <button
-      class="add-card-btn mt-3 flex items-center gap-1 text-sm text-gray-400 hover:text-brand-600 transition-colors"
+      class="add-card-btn mt-3 flex items-center gap-1 text-sm text-white/55 hover:text-brand-100 transition-colors"
       data-column-id="${col.id}"
     >
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
       </svg>
-      Add card
+      Add task
     </button>
+    <div class="col-resize-handle" title="Drag to resize column"></div>
   `;
 
   // ── Inline column rename ─────────────────────────────────────────────────
@@ -219,6 +297,29 @@ function buildColumnEl(col, boardId, allColumns) {
 
   // Stop column drag when user is typing in the title input
   input.addEventListener('mousedown', (e) => e.stopPropagation());
+
+  // Show/hide delete button on column hover
+  const header = el.querySelector('.col-header');
+  const delBtn = el.querySelector('.delete-col-btn');
+  el.addEventListener('mouseenter', () => delBtn.classList.remove('opacity-0'));
+  el.addEventListener('mouseleave', () => delBtn.classList.add('opacity-0'));
+  delBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+  delBtn.addEventListener('click', async () => {
+    const cardCount = el.querySelectorAll('.card').length;
+    const msg = cardCount > 0
+      ? `Delete "${col.title}" and its ${cardCount} task${cardCount !== 1 ? 's' : ''}?`
+      : `Delete "${col.title}"?`;
+    if (!confirm(msg)) return;
+    const next = allColumns.filter((c) => c.id !== col.id);
+    try {
+      await saveColumns(boardId, next);
+      renderBoard({ id: boardId, title: document.getElementById('board-title-display')?.textContent?.trim() || '', columns: next });
+    } catch (err) {
+      console.error('Delete column failed:', err);
+    }
+  });
+
+  _initColumnResize(el, col.id);
 
   return el;
 }
@@ -251,6 +352,73 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+function _slugifyColumnId(title) {
+  return String(title)
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32) || 'column';
+}
+
+// ─── Column resize ────────────────────────────────────────────────────────────
+
+/**
+ * Clears all saved column widths from localStorage and resets all column
+ * elements to the default width (w-72 = 288px).
+ */
+export function resetColumnWidths() {
+  document.querySelectorAll('#columns-wrapper .column').forEach((colEl) => {
+    const id = colEl.dataset.columnId;
+    if (id) localStorage.removeItem(`colWidth:${id}`);
+    colEl.style.width = '';
+  });
+}
+
+/**
+ * Attaches a right-edge drag handle to resize column width.
+ * Width is saved to localStorage so it persists across page reloads.
+ *
+ * @param {HTMLElement} colEl
+ * @param {string} columnId
+ */
+function _initColumnResize(colEl, columnId) {
+  const handle = colEl.querySelector('.col-resize-handle');
+  if (!handle) return;
+
+  // Restore saved width
+  const saved = localStorage.getItem(`colWidth:${columnId}`);
+  if (saved) {
+    const w = parseInt(saved, 10);
+    if (w >= 200 && w <= 700) colEl.style.width = `${w}px`;
+  }
+
+  handle.addEventListener('mousedown', (downEvent) => {
+    downEvent.preventDefault();
+    downEvent.stopPropagation();
+    colEl.draggable = false;
+
+    const startX     = downEvent.clientX;
+    const startWidth = colEl.getBoundingClientRect().width;
+
+    const onMove = (e) => {
+      const next = Math.max(200, Math.min(700, Math.round(startWidth + e.clientX - startX)));
+      colEl.style.width = `${next}px`;
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      colEl.draggable = true;
+      const w = Math.round(colEl.getBoundingClientRect().width);
+      localStorage.setItem(`colWidth:${columnId}`, w);
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 // ─── Column drag-to-reorder ───────────────────────────────────────────────────
 
 /**
@@ -280,6 +448,7 @@ function _initColumnDrag(boardId, columns) {
   wrapper.addEventListener('dragend', () => {
     if (dragSrc) dragSrc.classList.remove('opacity-40');
     wrapper.querySelectorAll('.column').forEach((c) => c.classList.remove('col-drag-over'));
+    _clearColDropIndicator();
     dragSrc = null;
   });
 
@@ -288,13 +457,21 @@ function _initColumnDrag(boardId, columns) {
     if (!col || col === dragSrc || !dragSrc) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    wrapper.querySelectorAll('.column').forEach((c) => c.classList.remove('col-drag-over'));
-    col.classList.add('col-drag-over', 'ring-2', 'ring-brand-400');
+
+    _clearColDropIndicator();
+    const cols   = [...wrapper.querySelectorAll('.column')];
+    const srcIdx = cols.indexOf(dragSrc);
+    const tgtIdx = cols.indexOf(col);
+    const indicator = _createColDropIndicator();
+    if (srcIdx < tgtIdx) {
+      col.after(indicator);
+    } else {
+      col.before(indicator);
+    }
   });
 
   wrapper.addEventListener('dragleave', (e) => {
-    const col = e.target.closest('.column');
-    if (col) col.classList.remove('col-drag-over', 'ring-2', 'ring-brand-400');
+    if (!wrapper.contains(e.relatedTarget)) _clearColDropIndicator();
   });
 
   wrapper.addEventListener('drop', async (e) => {
@@ -302,7 +479,8 @@ function _initColumnDrag(boardId, columns) {
     const col = e.target.closest('.column');
     if (!col || col === dragSrc || !dragSrc) return;
 
-    col.classList.remove('col-drag-over', 'ring-2', 'ring-brand-400');
+    col.classList.remove('col-drag-over');
+    _clearColDropIndicator();
 
     // Re-order DOM
     const cols   = [...wrapper.querySelectorAll('.column')];
@@ -328,5 +506,16 @@ function _initColumnDrag(boardId, columns) {
       console.error('Failed to save column order:', err);
     }
   });
+
+  function _createColDropIndicator() {
+    const el = document.createElement('div');
+    el.className = 'col-drop-indicator w-0.5 self-stretch bg-brand-500 rounded flex-shrink-0';
+    el.style.minHeight = '60px';
+    return el;
+  }
+
+  function _clearColDropIndicator() {
+    wrapper.querySelectorAll('.col-drop-indicator').forEach((el) => el.remove());
+  }
 }
 

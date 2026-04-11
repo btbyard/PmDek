@@ -10,11 +10,14 @@ export default {
       // Brand tokens — centralised so contributors only change one place.
       colors: {
         brand: {
-          50:  '#eef2ff',
-          100: '#e0e7ff',
-          500: '#6366f1',  // primary interactive
-          600: '#4f46e5',  // hover
-          700: '#4338ca',  // active / focus ring
+          50:  '#fdf6e3',
+          100: '#f5e4a8',
+          200: '#e8c84e',
+          400: '#d4a017',
+          500: '#c48a00',  // primary interactive gold
+          600: '#a06e00',  // hover
+          700: '#7a5200',  // active / dark accent
+          900: '#090806',
         },
       },
       fontFamily: {

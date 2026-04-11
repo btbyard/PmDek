@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PMDek</title>
+  <link rel="icon" type="image/svg+xml" href="/spade.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -17,7 +18,7 @@
     <div class="w-full max-w-sm text-center">
 
       <div class="mb-8">
-        <span class="text-4xl font-bold text-brand-500 tracking-tight">PM</span><span class="text-4xl font-bold text-gray-800 tracking-tight">Dek</span>
+        <img src="/pmdeklogo2.png" alt="PMDek" class="h-12 mx-auto w-auto" />
         <p class="mt-2 text-sm text-gray-500">Your lightweight Kanban board</p>
       </div>
 
@@ -63,7 +64,7 @@
           <input id="password-input" type="password" autocomplete="current-password" placeholder="Password"
             required minlength="6" class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
           <button id="auth-submit-btn" type="submit"
-            class="w-full py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors">
+            class="gold-btn w-full py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors">
             Sign in
           </button>
         </form>
@@ -87,9 +88,12 @@
   <div id="boards-view" class="hidden flex-col h-full">
 
     <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
-      <span class="text-xl font-bold">
-        <span class="text-brand-500">PM</span><span class="text-gray-800">Dek</span>
-      </span>
+      <div class="flex items-center gap-2">
+        <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-9 w-auto" />
+        <span class="text-xl font-bold tracking-tight">
+          <span class="text-brand-500">PM</span><span class="text-gray-800">Dek</span>
+        </span>
+      </div>
       <div class="flex items-center gap-3">
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
@@ -101,21 +105,21 @@
       <div class="max-w-5xl mx-auto px-6 py-10">
 
         <div class="flex items-center justify-between mb-8">
-          <h1 class="text-2xl font-semibold text-gray-800">Boards</h1>
+          <h1 class="text-2xl font-semibold text-gray-800">Project Management Decks</h1>
           <div class="flex items-center gap-2">
             <button id="ai-board-btn"
-              class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-brand-600
-                     bg-brand-50 hover:bg-brand-100 rounded-lg transition-colors">
+              class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-900
+                     bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
               <span class="text-base leading-none">✨</span>
               Do it for me Gemini
             </button>
             <button id="create-board-btn"
               class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white
-                     bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
+                     bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors gold-btn">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
               </svg>
-              Create board
+              Create Deck
             </button>
           </div>
         </div>
@@ -132,22 +136,51 @@
 
     <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
 
-      <button id="back-to-boards-btn"
-        class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-        </svg>
-        Boards
-      </button>
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2">
+          <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-8 w-auto" />
+          <span class="text-lg font-bold tracking-tight">
+            <span class="text-brand-500">PM</span><span class="text-gray-800">Dek</span>
+          </span>
+        </div>
+        <button id="back-to-boards-btn"
+          class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Decks
+        </button>
+      </div>
 
-      <span id="board-title-display" class="text-sm font-semibold text-gray-700 truncate max-w-xs"></span>
+      <div class="flex items-center gap-2">
+        <button id="deck-prev-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Previous deck" aria-label="Previous deck">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </button>
+        <span id="board-title-display" class="text-xl font-bold tracking-tight text-gray-900 truncate max-w-sm"></span>
+        <button id="deck-next-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Next deck" aria-label="Next deck">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
 
-      <button id="ai-trigger-btn"
-        class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-brand-600
-               bg-brand-50 hover:bg-brand-100 rounded-lg transition-colors">
-        <span class="text-base leading-none">✨</span>
-        Do it for me Gemini
-      </button>
+      <div class="flex items-center gap-2">
+        <button id="reset-col-widths-btn"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500
+                 hover:text-gray-800 border border-gray-200 hover:border-gray-300
+                 bg-white hover:bg-gray-50 rounded-lg transition-colors"
+          title="Reset all card (column) widths to default">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          Reset card widths
+        </button>
+        <button id="ai-trigger-btn"
+          class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-amber-900
+                 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
+          <span class="text-base leading-none">✨</span>
+          Do it for me Gemini
+        </button>
+      </div>
 
       <div class="flex items-center gap-3">
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />

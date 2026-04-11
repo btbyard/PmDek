@@ -41,9 +41,12 @@ export const db        = getFirestore(app);
 export const functions = getFunctions(app, 'us-central1');
 
 // ─── Emulator connections (local dev only) ────────────────────────────────────
-// Vite sets import.meta.env.DEV = true during `npm run dev`.
-// These calls must happen immediately after service instantiation.
-if (import.meta.env.DEV) {
+// Emulators are opt-in so local dev can run without Java/emulator tooling.
+// Set VITE_USE_FIREBASE_EMULATORS=true in .env to enable local emulator routing.
+const useFirebaseEmulators =
+  import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true';
+
+if (useFirebaseEmulators) {
   connectAuthEmulator(auth,           'http://localhost:9099',           { disableWarnings: true });
   connectFirestoreEmulator(db,         'localhost', 8080);
   connectFunctionsEmulator(functions,  'localhost', 5001);

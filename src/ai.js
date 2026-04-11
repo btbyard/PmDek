@@ -108,7 +108,7 @@ export function openAiModal(columnId) {
               Cancel
             </button>
             <button type="submit" id="ai-submit"
-              class="px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors flex items-center gap-2">
+              class="gold-btn px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors flex items-center gap-2">
               <span id="ai-btn-label">Do it for me Gemini</span>
               <svg id="ai-spinner" class="hidden w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
@@ -134,6 +134,7 @@ export function openAiModal(columnId) {
   modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) close();
   });
+  _bindModalSubmitKeys(form);
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -162,5 +163,18 @@ export function openAiModal(columnId) {
       spinner.classList.add('hidden');
       document.getElementById('ai-submit').disabled = false;
     }
+  });
+}
+
+function _bindModalSubmitKeys(form) {
+  form.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.defaultPrevented) return;
+
+    const target = e.target;
+    const isTextArea = target instanceof HTMLTextAreaElement;
+    if (isTextArea && e.shiftKey) return;
+
+    e.preventDefault();
+    form.requestSubmit();
   });
 }
