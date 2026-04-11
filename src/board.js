@@ -28,6 +28,7 @@ import {
 } from 'firebase/firestore';
 
 import { db } from './firebase.js';
+import { reRenderCards } from './cards.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -70,11 +71,13 @@ export function setBoardId(id) {
  * @param {string} [title='My Board']
  * @returns {Promise<string>} boardId
  */
-export async function createBoard(user, title = 'My Board', columns = DEFAULT_COLUMNS) {
+export async function createBoard(user, title = 'My Board', columns = DEFAULT_COLUMNS, dueDate = null, color = null) {
   const ref = await addDoc(collection(db, 'boards'), {
     userId:    user.uid,
     title:     title.trim() || 'My Board',
     columns:   columns,
+    dueDate:   dueDate || null,
+    color:     color || null,
     createdAt: serverTimestamp(),
   });
   return ref.id;
@@ -126,15 +129,33 @@ export async function deleteBoard(boardId) {
 }
 
 /**
+ * Archives a board by setting archived: true on the document.
+ * @param {string} boardId
+ * @returns {Promise<void>}
+ */
+export async function archiveBoard(boardId) {
+  await updateDoc(doc(db, 'boards', boardId), { archived: true, archivedAt: serverTimestamp() });
+}
+
+/**
+ * Restores an archived board by clearing the archived flag.
+ * @param {string} boardId
+ * @returns {Promise<void>}
+ */
+export async function unarchiveBoard(boardId) {
+  await updateDoc(doc(db, 'boards', boardId), { archived: false, archivedAt: null });
+}
+
+/**
  * Creates a new column block on the active board and persists it.
  * Used by the top "Create Card" action (deck-level column creation).
  *
  * @param {string} [title='New Column']
  * @returns {Promise<void>}
  */
-export async function createColumnBlock(title = 'New Column') {
+export async function createColumnBlock(title = 'New Card') {
   const boardId = getBoardId();
-  const rawTitle = (title || '').trim() || 'New Column';
+  const rawTitle = (title || '').trim() || 'New Card';
 
   const existingColumns = [...document.querySelectorAll('.column')].map((col, index) => {
     const input = col.querySelector('.col-title-input');
@@ -166,6 +187,7 @@ export async function createColumnBlock(title = 'New Column') {
 
   const boardTitle = document.getElementById('board-title-display')?.textContent?.trim() || 'Deck';
   renderBoard({ id: boardId, title: boardTitle, columns: nextColumns });
+  reRenderCards();
 }
 
 // ─── DOM rendering ───────────────────────────────────────────────────────────
@@ -203,7 +225,7 @@ export function renderBoard(board) {
     'bg-transparent hover:bg-brand-500/10',
     'transition-all duration-150',
   ].join(' ');
-  addColBtn.title = 'Add column';
+  addColBtn.title = 'Add card';
   addColBtn.innerHTML = `
     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -314,6 +336,7 @@ function buildColumnEl(col, boardId, allColumns) {
     try {
       await saveColumns(boardId, next);
       renderBoard({ id: boardId, title: document.getElementById('board-title-display')?.textContent?.trim() || '', columns: next });
+      reRenderCards();
     } catch (err) {
       console.error('Delete column failed:', err);
     }

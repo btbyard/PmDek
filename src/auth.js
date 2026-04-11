@@ -24,6 +24,10 @@ import {
   sendPasswordResetEmail,
   signOut,
   onAuthStateChanged,
+  deleteUser,
+  reauthenticateWithPopup,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
 } from 'firebase/auth';
 
 import { auth } from './firebase.js';
@@ -86,6 +90,34 @@ export function resetPassword(email) {
  */
 export function signOutUser() {
   return signOut(auth);
+}
+
+/**
+ * Re-authenticates then permanently deletes the current Firebase Auth account.
+ * The caller is responsible for deleting Firestore content first.
+ *
+ * For Google/GitHub users this triggers a popup re-auth.
+ * For email users the caller must supply the password.
+ *
+ * @param {string|null} [emailPassword]  Email user's password (required for email accounts)
+ * @returns {Promise<void>}
+ */
+export async function deleteAccount(emailPassword = null) {
+  const user = auth.currentUser;
+  if (!user) throw new Error('No authenticated user.');
+
+  // Re-authenticate based on provider
+  const providerIds = user.providerData.map((p) => p.providerId);
+  if (providerIds.includes('google.com')) {
+    await reauthenticateWithPopup(user, new GoogleAuthProvider());
+  } else if (providerIds.includes('github.com')) {
+    await reauthenticateWithPopup(user, new GithubAuthProvider());
+  } else if (providerIds.includes('password') && emailPassword) {
+    const cred = EmailAuthProvider.credential(user.email, emailPassword);
+    await reauthenticateWithCredential(user, cred);
+  }
+
+  await deleteUser(user);
 }
 
 /**

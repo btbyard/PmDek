@@ -14,74 +14,150 @@
 <body class="h-full flex flex-col">
 
   <!-- ── 1. Landing / Sign-in view ───────────────────────────────────────── -->
-  <div id="landing-view" class="flex-1 items-center justify-center p-6">
-    <div class="w-full max-w-sm text-center">
+  <div id="landing-view" class="flex-1 flex flex-col lg:flex-row min-h-screen">
 
-      <div class="mb-8">
-        <img src="/pmdeklogo2.png" alt="PMDek" class="h-12 mx-auto w-auto" />
-        <p class="mt-2 text-sm text-gray-500">Your lightweight Kanban board</p>
+    <!-- Left: Marketing hero -->
+    <div class="flex-1 flex flex-col justify-center px-8 py-12 lg:px-16
+                bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white">
+
+      <!-- Logo -->
+      <div class="flex items-center gap-3 mb-10">
+        <img src="/pmdeklogo2.png" alt="PMDek" class="h-10 w-auto" />
+        <span class="text-2xl font-bold tracking-tight">
+          <span class="text-brand-400">PM</span><span class="text-white">Dek</span>
+        </span>
       </div>
 
-      <p id="auth-error" class="hidden mb-4 text-sm rounded-lg px-4 py-2"></p>
+      <!-- Headline -->
+      <h1 class="text-4xl lg:text-5xl font-extrabold leading-tight mb-4 max-w-lg">
+        Ship projects,<br/>
+        <span class="text-brand-400">not paperwork.</span>
+      </h1>
+      <p class="text-gray-400 text-lg max-w-md mb-10 leading-relaxed">
+        A fast, AI-powered Kanban board. Create entire project decks in seconds —
+        just describe what you're building.
+      </p>
 
-      <div class="flex flex-col gap-3">
+      <!-- Feature highlights -->
+      <ul class="flex flex-col gap-4 max-w-sm">
+        <li class="flex items-start gap-3">
+          <span class="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center">
+            <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+            </svg>
+          </span>
+          <div>
+            <p class="text-sm font-semibold text-white">AI deck generation</p>
+            <p class="text-xs text-gray-500">Describe a project; get a full board with tasks instantly.</p>
+          </div>
+        </li>
+        <li class="flex items-start gap-3">
+          <span class="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center">
+            <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+            </svg>
+          </span>
+          <div>
+            <p class="text-sm font-semibold text-white">Due dates &amp; attachments</p>
+            <p class="text-xs text-gray-500">Keep deadlines visible and files attached to every card.</p>
+          </div>
+        </li>
+        <li class="flex items-start gap-3">
+          <span class="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center">
+            <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+            </svg>
+          </span>
+          <div>
+            <p class="text-sm font-semibold text-white">Drag-and-drop Kanban</p>
+            <p class="text-xs text-gray-500">Move tasks between columns with subtasks and progress tracking.</p>
+          </div>
+        </li>
+        <li class="flex items-start gap-3">
+          <span class="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center">
+            <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+            </svg>
+          </span>
+          <div>
+            <p class="text-sm font-semibold text-white">Built on Firebase</p>
+            <p class="text-xs text-gray-500">Real-time sync, secure auth, and cloud storage — free to start.</p>
+          </div>
+        </li>
+      </ul>
 
-        <button id="google-sign-in" class="btn-signin">
-          <svg class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-          </svg>
-          Sign in with Google
-        </button>
-
-        <button id="github-sign-in" class="btn-signin">
-          <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path fill-rule="evenodd" clip-rule="evenodd"
-              d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482
-                 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462
-                 -1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529
-                 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943
-                 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75
-                 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025
-                 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842
-                 -2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743
-                 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
-          </svg>
-          Sign in with GitHub
-        </button>
-
-        <div class="flex items-center gap-3 my-1">
-          <div class="flex-1 h-px bg-gray-200"></div>
-          <span class="text-xs text-gray-400">or</span>
-          <div class="flex-1 h-px bg-gray-200"></div>
-        </div>
-
-        <form id="email-auth-form" class="flex flex-col gap-2 text-left">
-          <input id="email-input" type="email" autocomplete="email" placeholder="Email"
-            required class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-          <input id="password-input" type="password" autocomplete="current-password" placeholder="Password"
-            required minlength="6" class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-          <button id="auth-submit-btn" type="submit"
-            class="gold-btn w-full py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors">
-            Sign in
-          </button>
-        </form>
-
-        <div class="flex flex-col gap-1 items-center">
-          <button id="forgot-password-btn" class="text-xs text-gray-400 hover:text-brand-600 transition-colors">
-            Forgot password?
-          </button>
-          <button id="auth-toggle-btn" class="text-xs text-gray-400 hover:text-brand-600 transition-colors">
-            Don't have an account? Create one
-          </button>
-        </div>
-
-      </div>
-
-      <p class="mt-8 text-xs text-gray-400">Open source · Built with Firebase + Gemini</p>
+      <p class="mt-12 text-xs text-gray-600">Open source · Powered by Gemini AI</p>
     </div>
+
+    <!-- Right: Auth form -->
+    <div class="flex items-center justify-center px-8 py-12 bg-white lg:w-[420px] lg:flex-none">
+      <div class="w-full max-w-sm">
+
+        <div class="mb-7 text-center lg:text-left">
+          <h2 class="text-2xl font-bold text-gray-900">Get started</h2>
+          <p class="mt-1 text-sm text-gray-500">Sign in or create a free account.</p>
+        </div>
+
+        <p id="auth-error" class="hidden mb-4 text-sm rounded-lg px-4 py-2"></p>
+
+        <div class="flex flex-col gap-3">
+
+          <button id="google-sign-in" class="btn-signin">
+            <svg class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            Sign in with Google
+          </button>
+
+          <button id="github-sign-in" class="btn-signin">
+            <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill-rule="evenodd" clip-rule="evenodd"
+                d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482
+                   0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462
+                   -1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529
+                   2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943
+                   0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75
+                   1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025
+                   2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842
+                   -2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743
+                   0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
+            </svg>
+            Sign in with GitHub
+          </button>
+
+          <div class="flex items-center gap-3 my-1">
+            <div class="flex-1 h-px bg-gray-200"></div>
+            <span class="text-xs text-gray-400">or</span>
+            <div class="flex-1 h-px bg-gray-200"></div>
+          </div>
+
+          <form id="email-auth-form" class="flex flex-col gap-2 text-left">
+            <input id="email-input" type="email" autocomplete="email" placeholder="Email"
+              required class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+            <input id="password-input" type="password" autocomplete="current-password" placeholder="Password"
+              required minlength="6" class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+            <button id="auth-submit-btn" type="submit"
+              class="gold-btn w-full py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors">
+              Sign in
+            </button>
+          </form>
+
+          <div class="flex flex-col gap-1 items-center">
+            <button id="forgot-password-btn" class="text-xs text-gray-400 hover:text-brand-600 transition-colors">
+              Forgot password?
+            </button>
+            <button id="auth-toggle-btn" class="text-xs text-gray-400 hover:text-brand-600 transition-colors">
+              Don't have an account? Create one
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <!-- ── 2. Boards home view ──────────────────────────────────────────────── -->
@@ -97,21 +173,30 @@
       <div class="flex items-center gap-3">
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
-        <button class="sign-out-btn text-sm text-gray-400 hover:text-gray-700 transition-colors">Sign out</button>
+        <button id="account-menu-btn-boards" aria-label="Account menu"
+          class="text-sm text-gray-400 hover:text-gray-700 transition-colors flex items-center gap-1">
+          Account
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
       </div>
     </header>
-
     <main class="flex-1 overflow-auto">
       <div class="max-w-5xl mx-auto px-6 py-10">
 
-        <div class="flex items-center justify-between mb-8">
+        <div class="flex items-center justify-between mb-6">
           <h1 class="text-2xl font-semibold text-gray-800">Project Management Decks</h1>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2" id="boards-action-btns">
             <button id="ai-board-btn"
               class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-900
                      bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
               <span class="text-base leading-none">✨</span>
-              Do it for me Gemini
+              Use AI to help
+            </button>
+            <button id="ai-board-help-btn" aria-label="AI help examples"
+              class="w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold
+                     text-amber-700 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors">?
             </button>
             <button id="create-board-btn"
               class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white
@@ -122,6 +207,20 @@
               Create Deck
             </button>
           </div>
+        </div>
+
+        <!-- Notebook-style tabs -->
+        <div class="flex border-b border-gray-200 mb-8 -mx-1">
+          <button id="tab-current-btn"
+            class="boards-tab px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
+                   border-brand-500 text-brand-600">
+            Current Decks
+          </button>
+          <button id="tab-archived-btn"
+            class="boards-tab px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
+                   border-transparent text-gray-500 hover:text-gray-700">
+            Archived Decks
+          </button>
         </div>
 
         <!-- Board tiles injected here by boards-home.js -->
@@ -156,13 +255,27 @@
         <button id="deck-prev-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Previous deck" aria-label="Previous deck">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
         </button>
-        <span id="board-title-display" class="text-xl font-bold tracking-tight text-gray-900 truncate max-w-sm"></span>
+        <div class="flex flex-col items-center">
+          <span id="board-title-display" class="text-xl font-bold tracking-tight text-gray-900 truncate max-w-sm"></span>
+          <span id="board-due-date-display" class="hidden text-xs text-gray-400 mt-0.5"></span>
+        </div>
         <button id="deck-next-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Next deck" aria-label="Next deck">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         </button>
       </div>
 
       <div class="flex items-center gap-2">
+        <button id="project-timeline-btn"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500
+                 hover:text-gray-800 border border-gray-200 hover:border-gray-300
+                 bg-white hover:bg-gray-50 rounded-lg transition-colors"
+          title="Project Timeline">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+          Timeline
+        </button>
         <button id="reset-col-widths-btn"
           class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500
                  hover:text-gray-800 border border-gray-200 hover:border-gray-300
@@ -178,14 +291,24 @@
           class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-amber-900
                  bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
           <span class="text-base leading-none">✨</span>
-          Do it for me Gemini
+          Use AI to help
+        </button>
+        <button id="ai-board-help-btn-board" aria-label="AI help examples"
+          class="w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold
+                 text-amber-700 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors">?
         </button>
       </div>
 
       <div class="flex items-center gap-3">
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
-        <button class="sign-out-btn text-sm text-gray-400 hover:text-gray-700 transition-colors">Sign out</button>
+        <button id="account-menu-btn-board" aria-label="Account menu"
+          class="text-sm text-gray-400 hover:text-gray-700 transition-colors flex items-center gap-1">
+          Account
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
       </div>
 
     </header>
@@ -195,6 +318,60 @@
     </main>
 
   </div>
+
+  <!-- AI Chat Sidebar -->
+  <aside id="ai-chat-sidebar"
+         class="fixed top-0 right-0 bottom-0 w-96 bg-white border-l border-gray-200
+                flex flex-col shadow-2xl z-40
+                translate-x-full transition-transform duration-300 ease-in-out"
+         aria-label="AI Assistant">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-amber-50 flex-shrink-0">
+      <div class="flex items-center gap-2">
+        <span class="text-lg leading-none select-none">✨</span>
+        <h2 class="text-sm font-semibold text-amber-900">AI Assistant</h2>
+      </div>
+      <button id="ai-chat-close-btn"
+              class="p-1.5 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded-lg transition-colors"
+              aria-label="Close AI chat">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Messages -->
+    <div id="ai-chat-messages"
+         class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 bg-gray-50">
+      <div id="ai-chat-empty" class="flex flex-col items-center justify-center h-full text-center px-6 py-8">
+        <span class="text-5xl mb-3 select-none">✨</span>
+        <p class="text-sm font-semibold text-gray-600 mb-1">AI Assistant</p>
+        <p class="text-xs text-gray-400 leading-relaxed">
+          Ask me to create a PM Deck for your project,<br>or add tasks to the current board.
+        </p>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="border-t border-gray-200 p-3 bg-white flex-shrink-0">
+      <form id="ai-chat-form" class="flex flex-col gap-2">
+        <textarea
+          id="ai-chat-input"
+          rows="2"
+          placeholder="Describe a project to create a full deck…"
+          maxlength="500"
+          class="w-full rounded-xl border-gray-300 text-sm resize-none focus:ring-brand-500 focus:border-brand-500 py-2.5 px-3 leading-snug"
+        ></textarea>
+        <button type="submit" id="ai-chat-send-btn"
+                class="gold-btn flex items-center justify-center gap-2 w-full py-2 text-sm font-medium rounded-xl">
+          <span class="text-base leading-none">✨</span>
+          Send
+        </button>
+      </form>
+    </div>
+
+  </aside>
 
   <!-- Modal portal -->
   <div id="modal-root"></div>

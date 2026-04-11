@@ -7,15 +7,31 @@
  * in the top-right that opens a rename modal. Clicking the card body opens the board.
  */
 
-import { getUserBoards, createBoard, renameBoard, deleteBoard, DEFAULT_COLUMNS } from './board.js';
-import { generateBoard }                           from './ai.js';
+import { getUserBoards, createBoard, renameBoard, deleteBoard, archiveBoard, unarchiveBoard, DEFAULT_COLUMNS, setBoardId } from './board.js';
+import { generateBoard, generateBoardWithTasks }            from './ai.js';
+import { createCard }                                       from './cards.js';
 
 // Store the refresh callback so the rename modal can refresh the grid after saving.
 let _onBoardOpen = null;
 let _currentUser = null;
 let _lastBoards = [];
+let _activeTab = 'current'; // 'current' | 'archived'
+let _tabsInited = false;
 const BOARDS_LOAD_TIMEOUT_MS = 7000;
 const BOARD_WRITE_TIMEOUT_MS = 7000;
+
+const DECK_COLORS = [
+  { value: '#6366f1', label: 'Indigo' },
+  { value: '#8b5cf6', label: 'Purple' },
+  { value: '#ec4899', label: 'Pink' },
+  { value: '#ef4444', label: 'Red' },
+  { value: '#f97316', label: 'Orange' },
+  { value: '#d97706', label: 'Amber' },
+  { value: '#22c55e', label: 'Green' },
+  { value: '#14b8a6', label: 'Teal' },
+  { value: '#3b82f6', label: 'Blue' },
+  { value: '#64748b', label: 'Slate' },
+];
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -25,6 +41,9 @@ export async function renderBoardsHome(user, onBoardOpen) {
 
   const root = document.getElementById('boards-root');
   if (!root) return;
+
+  _initTabs();
+  _updateTabUI();
 
   if (_lastBoards.length === 0) {
     _lastBoards = _loadPersistedBoards(user.uid);
@@ -61,14 +80,36 @@ export async function renderBoardsHome(user, onBoardOpen) {
 export function openCreateBoardModal(user, onCreated) {
   const modalRoot = document.getElementById('modal-root');
 
+  const swatchesHtml = DECK_COLORS.map((c) => `
+    <button type="button" data-color="${c.value}"
+      class="deck-color-swatch w-6 h-6 rounded-full border-2 border-transparent hover:scale-110 transition-transform ring-offset-1"
+      style="background:${c.value}" title="${c.label}"></button>
+  `).join('');
+
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
         <h3 class="text-lg font-semibold text-gray-800 mb-4">Create Deck</h3>
         <form id="create-board-form" class="flex flex-col gap-4">
-          <input id="board-title-input" type="text" placeholder="Board name"
+          <input id="board-title-input" type="text" placeholder="Deck Name"
             required maxlength="100"
             class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+              Project Due Date <span class="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <input id="board-due-date-input" type="date"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">
+              Deck Color <span class="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <div class="flex gap-2 flex-wrap" id="deck-color-swatches">
+              ${swatchesHtml}
+            </div>
+            <input type="hidden" id="board-color-value" value="" />
+          </div>
           <div class="flex justify-end gap-2">
             <button type="button" id="create-board-cancel"
               class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
@@ -88,6 +129,19 @@ export function openCreateBoardModal(user, onCreated) {
   const input = document.getElementById('board-title-input');
   input.focus();
 
+  // Color swatch selection
+  document.getElementById('deck-color-swatches').querySelectorAll('.deck-color-swatch').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.deck-color-swatch').forEach((b) => {
+        b.style.outline = 'none';
+        b.style.borderColor = 'transparent';
+      });
+      btn.style.borderColor = '#374151';
+      btn.style.outline = `2px solid ${btn.dataset.color}40`;
+      document.getElementById('board-color-value').value = btn.dataset.color;
+    });
+  });
+
   const close = () => { modalRoot.innerHTML = ''; };
   document.getElementById('create-board-cancel').addEventListener('click', close);
   modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
@@ -103,10 +157,12 @@ export function openCreateBoardModal(user, onCreated) {
     const submitBtn = form.querySelector('[type="submit"]');
     if (submitBtn) submitBtn.disabled = true;
 
-    const title = input.value.trim() || 'My Board';
+    const title   = input.value.trim() || 'My Deck';
+    const dueDate = document.getElementById('board-due-date-input')?.value || null;
+    const color   = document.getElementById('board-color-value')?.value || null;
     try {
       const boardId = await _withTimeout(
-        createBoard(user, title),
+        createBoard(user, title, DEFAULT_COLUMNS, dueDate || null, color || null),
         BOARD_WRITE_TIMEOUT_MS,
         'Creating the board took too long.',
       );
@@ -114,6 +170,8 @@ export function openCreateBoardModal(user, onCreated) {
         id: boardId,
         title,
         columns: DEFAULT_COLUMNS.map((col) => ({ ...col })),
+        dueDate: dueDate || null,
+        color:   color || null,
       };
       _upsertCachedBoard(board);
       _persistCurrentBoards();
@@ -145,12 +203,12 @@ export function openAiBoardModal(user, onCreated) {
           <span class="text-lg">✨</span>
           <h3 class="text-lg font-semibold text-gray-800">Do it for me Gemini</h3>
         </div>
-        <p class="text-sm text-gray-500 mb-4">Describe your project and AI will suggest a board name and columns.</p>
+        <p class="text-sm text-gray-500 mb-4">Describe your project and AI will create a PM Deck with columns and tasks.</p>
         <form id="ai-board-form" class="flex flex-col gap-4">
           <textarea
             id="ai-board-prompt"
             rows="3"
-            placeholder="e.g. Mobile app for tracking personal finances"
+            placeholder="e.g. Create me a PM Deck for a calculator app project"
             required
             maxlength="500"
             class="w-full rounded-lg border-gray-300 text-sm resize-none focus:ring-brand-500 focus:border-brand-500"
@@ -200,13 +258,30 @@ export function openAiBoardModal(user, onCreated) {
 
     const prompt = promptArea.value.trim();
     try {
-      const { title, columns } = await generateBoard(prompt);
-      const boardObj = { title, columns };
+      const { title, columns } = await generateBoardWithTasks(prompt);
+      // Strip tasks from columns before saving the board structure
+      const boardColumns = columns.map(({ tasks: _t, ...col }) => col);
+      const boardObj = { title, columns: boardColumns };
       const boardId  = await _withTimeout(
-        createBoard(user, title, columns),
+        createBoard(user, title, boardColumns),
         BOARD_WRITE_TIMEOUT_MS,
         'Creating the AI board took too long.',
       );
+
+      // Set boardId so createCard can resolve it
+      setBoardId(boardId);
+
+      // Create all tasks and subtasks
+      statusEl.querySelector('span').textContent = 'Creating tasks…';
+      for (const col of columns) {
+        if (!Array.isArray(col.tasks)) continue;
+        for (let i = 0; i < col.tasks.length; i++) {
+          const t = col.tasks[i];
+          if (!t.title) continue;
+          await createCard(col.id, t.title, t.description || '', i, false, t.subtasks || []);
+        }
+      }
+
       _upsertCachedBoard({ id: boardId, ...boardObj });
       _persistCurrentBoards();
       close();
@@ -220,26 +295,75 @@ export function openAiBoardModal(user, onCreated) {
   });
 }
 
+// ─── Tabs ─────────────────────────────────────────────────────────────────────
+
+function _initTabs() {
+  if (_tabsInited) return;
+  _tabsInited = true;
+
+  document.getElementById('tab-current-btn')?.addEventListener('click', () => {
+    _activeTab = 'current';
+    _updateTabUI();
+    const root = document.getElementById('boards-root');
+    if (root) _renderTiles(root, _lastBoards);
+  });
+
+  document.getElementById('tab-archived-btn')?.addEventListener('click', () => {
+    _activeTab = 'archived';
+    _updateTabUI();
+    const root = document.getElementById('boards-root');
+    if (root) _renderTiles(root, _lastBoards);
+  });
+}
+
+function _updateTabUI() {
+  const currentBtn  = document.getElementById('tab-current-btn');
+  const archivedBtn = document.getElementById('tab-archived-btn');
+  const actionBtns  = document.getElementById('boards-action-btns');
+
+  const activeClass   = ['border-brand-500', 'text-brand-600'];
+  const inactiveClass = ['border-transparent', 'text-gray-500', 'hover:text-gray-700'];
+
+  if (_activeTab === 'current') {
+    currentBtn?.classList.add(...activeClass);
+    currentBtn?.classList.remove(...inactiveClass);
+    archivedBtn?.classList.remove(...activeClass);
+    archivedBtn?.classList.add(...inactiveClass);
+    if (actionBtns) actionBtns.style.visibility = '';
+  } else {
+    archivedBtn?.classList.add(...activeClass);
+    archivedBtn?.classList.remove(...inactiveClass);
+    currentBtn?.classList.remove(...activeClass);
+    currentBtn?.classList.add(...inactiveClass);
+    if (actionBtns) actionBtns.style.visibility = 'hidden';
+  }
+}
+
 // ─── Private rendering ────────────────────────────────────────────────────────
 
 function _renderTiles(root, boards, { instant = false } = {}) {
   root.innerHTML = '';
 
-  if (boards.length === 0) {
-    root.innerHTML = `
-      <div class="flex flex-col items-center justify-center py-20 text-center">
-        <div class="text-5xl mb-4">📋</div>
-        <p class="text-gray-500 text-sm">No boards yet.</p>
-        <p class="text-gray-400 text-sm">Click <strong>Create Deck</strong> to get started.</p>
-      </div>
-    `;
+  const filtered = boards.filter((b) => (_activeTab === 'archived' ? b.archived === true : !b.archived));
+
+  if (filtered.length === 0) {
+    root.innerHTML = _activeTab === 'archived'
+      ? `<div class="flex flex-col items-center justify-center py-20 text-center">
+          <div class="text-5xl mb-4">🗄️</div>
+          <p class="text-gray-500 text-sm">No archived decks.</p>
+        </div>`
+      : `<div class="flex flex-col items-center justify-center py-20 text-center">
+          <div class="text-5xl mb-4">📋</div>
+          <p class="text-gray-500 text-sm">No boards yet.</p>
+          <p class="text-gray-400 text-sm">Click <strong>Create Deck</strong> to get started.</p>
+        </div>`;
     return;
   }
 
   const grid = document.createElement('div');
   grid.className = 'boards-grid flex flex-wrap gap-12 justify-center';
 
-  boards.forEach((board, index) => {
+  filtered.forEach((board, index) => {
     grid.appendChild(_buildCard(board, index, instant));
   });
 
@@ -341,9 +465,9 @@ function _buildCard(board, index = 0, instant = false) {
       <span class="board-tile-mark" style="color:rgba(255,255,255,0.85)">DEK</span><span style="font-size:0.6rem;color:rgba(255,255,255,0.7);line-height:1;margin-left:2px">&#9824;</span>
     </div>
     <!-- Top suit band -->
-    <div class="board-tile-band h-16 w-full flex-shrink-0 relative overflow-hidden">
+    <div class="board-tile-band h-16 w-full flex-shrink-0 relative overflow-hidden"
+         ${board.color ? `style="background: linear-gradient(135deg, ${board.color}ee 0%, ${board.color} 60%, ${board.color}99 100%) !important; border-bottom: 1px solid rgba(255,255,255,0.15);"` : ''}>
       <div class="board-tile-sheen"></div>
-
     </div>
     <div class="board-tile-body flex-1 flex flex-col justify-between p-3 pb-4">
       <div>
@@ -352,6 +476,7 @@ function _buildCard(board, index = 0, instant = false) {
         ${escapeHtml(board.title || 'Untitled Deck')}
         </h2>
         <p class="mt-1 text-xs" style="color:rgba(255,255,255,0.72)">${colCount} Card${colCount !== 1 ? 's' : ''}</p>
+        ${board.dueDate ? `<p class="mt-0.5 text-[10px]" style="color:rgba(255,255,255,0.5)">Due ${_formatDeckDate(board.dueDate)}</p>` : ''}
       </div>
     </div>
   `;
@@ -427,7 +552,27 @@ function _openBoardSettingsMenu(e, board) {
   menu.style.left = `${rect.left   + window.scrollX - 96}px`;   // right-align
   menu.style.position = 'fixed';
 
-  menu.innerHTML = `
+  menu.innerHTML = board.archived
+    ? `
+    <button data-action="restore"
+      class="w-full text-left px-4 py-2 hover:bg-green-50 text-green-700 transition-colors flex items-center gap-2">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+      </svg>
+      Restore
+    </button>
+    <div class="my-1 border-t border-gray-100"></div>
+    <button data-action="delete"
+      class="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 transition-colors flex items-center gap-2">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6
+             m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+      </svg>
+      Delete
+    </button>`
+    : `
     <button data-action="rename"
       class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2">
       <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -436,6 +581,14 @@ function _openBoardSettingsMenu(e, board) {
              m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
       </svg>
       Rename
+    </button>
+    <button data-action="archive"
+      class="w-full text-left px-4 py-2 hover:bg-amber-50 text-amber-700 transition-colors flex items-center gap-2">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8"/>
+      </svg>
+      Archive Deck
     </button>
     <div class="my-1 border-t border-gray-100"></div>
     <button data-action="delete"
@@ -446,8 +599,7 @@ function _openBoardSettingsMenu(e, board) {
              m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
       </svg>
       Delete board
-    </button>
-  `;
+    </button>`;
 
   document.body.appendChild(menu);
 
@@ -461,10 +613,22 @@ function _openBoardSettingsMenu(e, board) {
   // Use capture so it fires before any other click handlers
   setTimeout(() => document.addEventListener('click', closeMenu, true), 0);
 
-  menu.querySelector('[data-action="rename"]').addEventListener('click', () => {
+  menu.querySelector('[data-action="rename"]')?.addEventListener('click', () => {
     menu.remove();
     document.removeEventListener('click', closeMenu, true);
     _openRenameBoardModal(board);
+  });
+
+  menu.querySelector('[data-action="archive"]')?.addEventListener('click', () => {
+    menu.remove();
+    document.removeEventListener('click', closeMenu, true);
+    _openArchiveBoardModal(board);
+  });
+
+  menu.querySelector('[data-action="restore"]')?.addEventListener('click', () => {
+    menu.remove();
+    document.removeEventListener('click', closeMenu, true);
+    _doRestoreBoard(board);
   });
 
   menu.querySelector('[data-action="delete"]').addEventListener('click', () => {
@@ -589,6 +753,61 @@ function _openDeleteBoardModal(board) {
   });
 }
 
+// ─── Archive / Restore ────────────────────────────────────────────────────────
+
+function _openArchiveBoardModal(board) {
+  const modalRoot = document.getElementById('modal-root');
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <h3 class="text-base font-semibold text-gray-900 mb-2">Archive "${escapeHtml(board.title)}"?</h3>
+        <p class="text-sm text-gray-500 mb-6">This deck will be moved to Archived Decks. You can restore it any time.</p>
+        <div class="flex justify-end gap-2">
+          <button id="archive-board-cancel"
+            class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
+            Cancel
+          </button>
+          <button id="archive-board-confirm"
+            class="px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
+            Archive Deck
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('archive-board-cancel').addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+
+  document.getElementById('archive-board-confirm').addEventListener('click', async () => {
+    try {
+      await archiveBoard(board.id);
+      _upsertCachedBoard({ ...board, archived: true });
+      _persistCurrentBoards();
+      close();
+      await renderBoardsHome(_currentUser, _onBoardOpen);
+    } catch (err) {
+      console.error('Archive board failed:', err);
+    }
+  });
+}
+
+async function _doRestoreBoard(board) {
+  try {
+    await unarchiveBoard(board.id);
+    _upsertCachedBoard({ ...board, archived: false });
+    _persistCurrentBoards();
+    _activeTab = 'current';
+    await renderBoardsHome(_currentUser, _onBoardOpen);
+  } catch (err) {
+    console.error('Restore board failed:', err);
+  }
+}
+
 // ─── Utility ─────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
@@ -598,6 +817,13 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function _formatDeckDate(dateStr) {
+  if (!dateStr) return '';
+  try {
+    return new Date(dateStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch { return dateStr; }
 }
 
 function _upsertCachedBoard(board) {
@@ -622,9 +848,12 @@ function _persistCurrentBoards() {
 function _persistBoards(userId, boards) {
   try {
     const payload = boards.map((board) => ({
-      id: board.id,
-      title: board.title,
-      columns: Array.isArray(board.columns) ? board.columns : [],
+      id:       board.id,
+      title:    board.title,
+      columns:  Array.isArray(board.columns) ? board.columns : [],
+      archived: board.archived || false,
+      dueDate:  board.dueDate || null,
+      color:    board.color || null,
     }));
     window.localStorage.setItem(_getBoardsStorageKey(userId), JSON.stringify(payload));
   } catch {

@@ -24,8 +24,9 @@ import { getBoardId }    from './board.js';
 // ─── Callable references ──────────────────────────────────────────────────────
 // Instantiated once at module load — httpsCallable is cheap (no network call).
 
-const _generateCardFn  = httpsCallable(functions, 'generateCard');
-const _generateBoardFn = httpsCallable(functions, 'generateBoard');
+const _generateCardFn            = httpsCallable(functions, 'generateCard');
+const _generateBoardFn           = httpsCallable(functions, 'generateBoard');
+const _generateBoardWithTasksFn  = httpsCallable(functions, 'generateBoardWithTasks', { timeout: 60000 });
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -69,6 +70,23 @@ export async function generateBoard(prompt) {
   const { title, columns } = result.data;
   if (typeof title !== 'string' || !title || !Array.isArray(columns)) {
     throw new Error('generateBoard: unexpected response shape from Cloud Function.');
+  }
+  return { title, columns };
+}
+
+/**
+ * Calls the `generateBoardWithTasks` Cloud Function.
+ * Returns columns each with a `tasks` array (tasks have subtasks).
+ *
+ * @param {string} prompt  Free-text project description
+ * @returns {Promise<{ title: string, columns: Array<{id,title,order,tasks:Array}> }>}
+ */
+export async function generateBoardWithTasks(prompt) {
+  if (!prompt?.trim()) throw new Error('Prompt must not be empty.');
+  const result = await _generateBoardWithTasksFn({ prompt: prompt.trim() });
+  const { title, columns } = result.data;
+  if (typeof title !== 'string' || !title || !Array.isArray(columns)) {
+    throw new Error('generateBoardWithTasks: unexpected response shape from Cloud Function.');
   }
   return { title, columns };
 }

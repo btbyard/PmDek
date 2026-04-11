@@ -16,6 +16,7 @@ import { initializeApp }                          from 'firebase/app';
 import { getAuth, connectAuthEmulator }            from 'firebase/auth';
 import { getFirestore, connectFirestoreEmulator }  from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator }  from 'firebase/functions';
+import { getStorage, connectStorageEmulator }      from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
@@ -34,11 +35,13 @@ export const auth      = getAuth(app);
 /** Firestore database instance */
 export const db        = getFirestore(app);
 
-/**
- * Firebase Functions instance.
+/** Firebase Functions instance.
  * Region is us-central1 by default; change here if you deployed to another region.
  */
 export const functions = getFunctions(app, 'us-central1');
+
+/** Firebase Storage instance */
+export const storage = getStorage(app);
 
 // ─── Emulator connections (local dev only) ────────────────────────────────────
 // Emulators are opt-in so local dev can run without Java/emulator tooling.
@@ -50,4 +53,5 @@ if (useFirebaseEmulators) {
   connectAuthEmulator(auth,           'http://localhost:9099',           { disableWarnings: true });
   connectFirestoreEmulator(db,         'localhost', 8080);
   connectFunctionsEmulator(functions,  'localhost', 5001);
+  connectStorageEmulator(storage,      'localhost', 9199);
 }

@@ -28,6 +28,21 @@ import {
 } from 'firebase/firestore';
 
 import { db }                 from './firebase.js';
+import { storage }            from './firebase.js';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+const CARD_COLORS = [
+  { value: '#6366f1', label: 'Indigo' },
+  { value: '#8b5cf6', label: 'Purple' },
+  { value: '#ec4899', label: 'Pink' },
+  { value: '#ef4444', label: 'Red' },
+  { value: '#f97316', label: 'Orange' },
+  { value: '#22c55e', label: 'Green' },
+  { value: '#14b8a6', label: 'Teal' },
+  { value: '#3b82f6', label: 'Blue' },
+  { value: '#f59e0b', label: 'Amber' },
+  { value: '#64748b', label: 'Slate' },
+];
 import { getBoardId }         from './board.js';
 import { updateColumnCount }  from './board.js';
 import { initDragAndDrop }    from './drag.js';
@@ -36,6 +51,9 @@ import { initDragAndDrop }    from './drag.js';
 
 /** Holds the onSnapshot unsubscribe function. */
 let _unsubscribeCards = null;
+
+/** Last known snapshot of cards — used to re-render after a column change. */
+let _lastCards = [];
 
 /**
  * Starts a real-time listener on the cards collection for the active board.
@@ -55,8 +73,8 @@ export function subscribeToCards() {
   );
 
   _unsubscribeCards = onSnapshot(cardsQuery, (snapshot) => {
-    const cards = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-    renderAllCards(cards);
+    _lastCards = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderAllCards(_lastCards);
   });
 }
 
@@ -66,6 +84,14 @@ export function unsubscribeFromCards() {
     _unsubscribeCards();
     _unsubscribeCards = null;
   }
+}
+
+/**
+ * Re-renders cards from the last known snapshot.
+ * Call this after renderBoard() rebuilds the column shells so cards reappear.
+ */
+export function reRenderCards() {
+  renderAllCards(_lastCards);
 }
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
@@ -82,7 +108,7 @@ export function unsubscribeFromCards() {
  * @param {number} [order=0]
  * @returns {Promise<string>} New card document ID
  */
-export async function createCard(columnId, title, description = '', order = 0, checkable = false) {
+export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null) {
   const boardId = getBoardId();
   const ref = await addDoc(collection(db, 'cards'), {
     boardId,
@@ -92,7 +118,10 @@ export async function createCard(columnId, title, description = '', order = 0, c
     description: description.trim(),
     completed:   false,
     checkable,
-    subtasks:    [],
+    subtasks:    subtasks,
+    dueDate:     dueDate || null,
+    attachments: attachments,
+    cardColor:   cardColor || null,
     order,
     cardHeight: 82,
     createdAt:   serverTimestamp(),
@@ -190,6 +219,8 @@ function buildCardEl(card) {
   const el = document.createElement('div');
   const isCompleted = Boolean(card.completed);
   const subtasks = Array.isArray(card.subtasks) ? card.subtasks : [];
+  const attachments = Array.isArray(card.attachments) ? card.attachments : [];
+  const dueDate = card.dueDate || null;
 
   el.className      = [
     'card relative rounded-lg p-2.5 pb-8 cursor-grab active:cursor-grabbing',
@@ -203,6 +234,46 @@ function buildCardEl(card) {
   el.dataset.order    = String(card.order ?? 0);
   el.dataset.subtasks = JSON.stringify(subtasks);
   el.dataset.checkable = String(Boolean(card.checkable));
+  el.dataset.dueDate  = dueDate || '';
+  el.dataset.attachments = JSON.stringify(attachments);
+  el.dataset.cardColor = card.cardColor || '';
+
+  // Apply card accent color as a colored left border
+  if (card.cardColor) {
+    el.style.borderLeftColor = card.cardColor;
+    el.style.borderLeftWidth = '3px';
+    el.style.borderLeftStyle = 'solid';
+  }
+
+  // Due date badge
+  let dueDateHtml = '';
+  if (dueDate) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const due   = new Date(dueDate + 'T00:00:00');
+    const isOverdue = !isCompleted && due < today;
+    const isToday   = !isCompleted && due.getTime() === today.getTime();
+    const label = due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const cls = isOverdue
+      ? 'bg-red-500/20 text-red-300 border-red-500/30'
+      : isToday
+        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+        : 'bg-white/10 text-white/50 border-white/15';
+    dueDateHtml = `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 ${cls}">
+      <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+      </svg>${label}</span>`;
+  }
+
+  // Attachment badge
+  let attachBadge = '';
+  if (attachments.length) {
+    attachBadge = `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 bg-white/10 text-white/50 border-white/15">
+      <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+      </svg>${attachments.length}</span>`;
+  }
 
   const subtasksHtml = subtasks.map((task) => `
     <label class="flex items-center gap-2 text-[11px] text-white/60 mt-0.5 pl-5 border-l border-white/10 ml-1">
@@ -249,6 +320,7 @@ function buildCardEl(card) {
     </div>
     ${card.description ? `<p class="card-desc mt-1 text-xs text-white/60 line-clamp-2">${escapeHtml(card.description)}</p>` : ''}
     ${subtasks.length ? `<div class="mt-1">${subtasksHtml}</div>` : ''}
+    ${(dueDateHtml || attachBadge) ? `<div class="flex items-center gap-1.5 flex-wrap mt-1.5">${dueDateHtml}${attachBadge}</div>` : ''}
     <button class="move-card-prev-btn" data-card-id="${card.id}" title="Move to previous column">
       <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/>
@@ -288,6 +360,14 @@ function buildCardEl(card) {
  *
  * @param {import('firebase/auth').User} user  Authenticated user (for userId field)
  */
+/**
+ * Sets the current user UID so createCard works without needing a board DOM.
+ * Safe to call before the board view is rendered.
+ */
+export function setCurrentUser(user) {
+  _currentUid = user.uid;
+}
+
 export function initCardEvents(user) {
   // Store uid for createCard calls
   _currentUid = user.uid;
@@ -298,7 +378,13 @@ export function initCardEvents(user) {
     // ── Toggle task complete ─────────────────────────────────────────────
     const taskCheck = e.target.closest('.task-check');
     if (taskCheck) {
-      await updateCard(taskCheck.dataset.cardId, { completed: Boolean(taskCheck.checked) });
+      const isCompleted = Boolean(taskCheck.checked);
+      await updateCard(taskCheck.dataset.cardId, { completed: isCompleted });
+      if (isCompleted) {
+        const cardEl = taskCheck.closest('.card');
+        const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
+        _logCompletion(taskCheck.dataset.cardId, cardTitle, 'task');
+      }
       return;
     }
 
@@ -313,6 +399,11 @@ export function initCardEvents(user) {
           : task
       ));
       await updateCard(subtaskCheck.dataset.cardId, { subtasks: nextSubtasks });
+      if (subtaskCheck.checked) {
+        const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
+        const subtaskTitle = subtaskCheck.closest('label')?.querySelector('span')?.textContent?.trim() || '';
+        _logCompletion(subtaskCheck.dataset.cardId, cardTitle, 'subtask', { subtaskTitle });
+      }
       return;
     }
 
@@ -337,14 +428,19 @@ export function initCardEvents(user) {
       const cardEl = editBtn.closest('.card');
       let checkable = false;
       let subtasks = [];
+      let attachments = [];
       try { checkable = JSON.parse(cardEl.dataset.checkable ?? 'false'); } catch (_) {}
       subtasks = _readSubtasksFromCardEl(cardEl);
+      try { attachments = JSON.parse(cardEl.dataset.attachments || '[]'); } catch (_) {}
       openCardModal({
         cardId:      editBtn.dataset.cardId,
         title:       cardEl.querySelector('.card-title').textContent.replace(/\s*\d+\/\d+$/, '').trim(),
         description: cardEl.querySelector('.card-desc')?.textContent || '',
         checkable,
         subtasks,
+        dueDate:     cardEl.dataset.dueDate || null,
+        attachments,
+        cardColor:   cardEl.dataset.cardColor || null,
       });
       return;
     }
@@ -352,9 +448,10 @@ export function initCardEvents(user) {
     // ── Delete card ───────────────────────────────────────────────────────
     const delBtn = e.target.closest('.delete-card-btn');
     if (delBtn) {
-      if (confirm('Delete this card?')) {
-        await deleteCard(delBtn.dataset.cardId);
-      }
+      const cardId    = delBtn.dataset.cardId;
+      const cardEl    = delBtn.closest('.card');
+      const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.trim() || 'this card';
+      _openDeleteCardModal(cardId, cardTitle);
       return;
     }
 
@@ -510,7 +607,45 @@ function _openAddSubtaskModal(cardId, cardEl) {
   });
 }
 
+// ─── Completion log ───────────────────────────────────────────────────────────
+
+/**
+ * Logs a task or subtask completion event to Firestore.
+ * Fire-and-forget — failures are silently swallowed so they never block the UI.
+ */
+async function _logCompletion(cardId, cardTitle, type, extra = {}) {
+  try {
+    await addDoc(collection(db, 'completionLog'), {
+      cardId,
+      cardTitle,
+      boardId:     getBoardId(),
+      userId:      _currentUid,
+      type,
+      ...extra,
+      completedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.warn('Completion log write failed:', err);
+  }
+}
+
 // ─── Card modal ───────────────────────────────────────────────────────────────
+
+/**
+ * Uploads an array of File objects to Firebase Storage and returns their metadata.
+ * Path: attachments/{userId}/{timestamp}_{filename}
+ */
+async function _uploadAttachments(files, userId) {
+  const results = [];
+  for (const file of files) {
+    const path    = `attachments/${userId}/${Date.now()}_${file.name}`;
+    const fileRef = storageRef(storage, path);
+    await uploadBytes(fileRef, file);
+    const url = await getDownloadURL(fileRef);
+    results.push({ name: file.name, url, type: file.type, size: file.size });
+  }
+  return results;
+}
 
 /**
  * Opens the card create/edit modal.
@@ -521,12 +656,18 @@ function _openAddSubtaskModal(cardId, cardEl) {
  *
  * @param {{ columnId?: string, cardId?: string, title?: string, description?: string }} opts
  */
-function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [] }) {
+function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null }) {
   const modalRoot = document.getElementById('modal-root');
   const isEdit    = Boolean(cardId);
 
   // Local mutable copy of subtasks for the edit session
   let editSubtasks = subtasks.map((s) => ({ ...s }));
+  // Local mutable copy of attachments
+  let editAttachments = attachments.map((a) => ({ ...a }));
+  // Pending new files chosen via file input
+  let pendingFiles = [];
+  // Selected card color
+  let selectedCardColor = cardColor || null;
 
   const _subtaskRowHtml = (s) => `
     <li class="flex items-center gap-2 group" data-subtask-id="${escapeHtml(s.id)}">
@@ -607,9 +748,82 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     document.getElementById('modal-add-subtask-btn')?.addEventListener('click', _addNewSubtaskRow);
   };
 
+  // ── Attachments helpers ────────────────────────────────────────────────────
+
+  const _attachmentRowHtml = (a) => `
+    <li class="flex items-center gap-2 text-sm group" data-attach-key="${escapeHtml(a.url)}">
+      <svg class="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+      </svg>
+      <a href="${a.url}" target="_blank" rel="noopener noreferrer"
+         class="flex-1 text-brand-600 hover:underline truncate text-xs">${escapeHtml(a.name)}</a>
+      <button type="button" class="modal-attach-delete flex-shrink-0 text-gray-300 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100" title="Remove">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </li>
+  `;
+
+  const _pendingFileRowHtml = (name) => `
+    <li class="flex items-center gap-2 text-xs text-gray-500">
+      <svg class="w-3 h-3 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/>
+      </svg>
+      <span class="truncate">${escapeHtml(name)}</span>
+      <span class="text-amber-500 flex-shrink-0">queued</span>
+    </li>
+  `;
+
+  const _attachmentsSectionInner = () => `
+    <div class="flex items-center justify-between mb-1">
+      <p class="text-sm font-medium text-gray-700">Attachments</p>
+    </div>
+    ${editAttachments.length || pendingFiles.length ? `
+    <ul id="modal-attach-list" class="flex flex-col gap-1 mb-2">
+      ${editAttachments.map(_attachmentRowHtml).join('')}
+      ${pendingFiles.map(f => _pendingFileRowHtml(f.name)).join('')}
+    </ul>` : ''}
+    <label class="flex items-center gap-2 cursor-pointer text-sm text-brand-600 hover:text-brand-700">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+      </svg>
+      Add file
+      <input id="modal-file-input" type="file" multiple class="hidden" />
+    </label>
+  `;
+
+  const _renderAttachments = () => {
+    const section = document.getElementById('modal-attachments-section');
+    if (section) {
+      section.innerHTML = _attachmentsSectionInner();
+      _bindAttachmentSectionEvents();
+    }
+  };
+
+  const _bindAttachmentSectionEvents = () => {
+    const section = document.getElementById('modal-attachments-section');
+    if (!section) return;
+
+    section.querySelectorAll('.modal-attach-delete').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.closest('li').dataset.attachKey;
+        editAttachments = editAttachments.filter((a) => a.url !== key);
+        _renderAttachments();
+      });
+    });
+
+    const fileInput = document.getElementById('modal-file-input');
+    if (fileInput) {
+      fileInput.addEventListener('change', () => {
+        pendingFiles = [...pendingFiles, ...Array.from(fileInput.files)];
+        _renderAttachments();
+      });
+    }
+  };
+
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6">
         <h3 class="text-lg font-semibold text-gray-800 mb-4">${isEdit ? 'Edit card' : 'New card'}</h3>
         <form id="card-form" class="flex flex-col gap-4">
           <div>
@@ -634,6 +848,15 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
               maxlength="2000"
             >${escapeHtml(description)}</textarea>
           </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="card-due-date">Due date <span class="text-gray-400 font-normal">(optional)</span></label>
+            <input
+              id="card-due-date"
+              type="date"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500"
+              value="${dueDate || ''}"
+            />
+          </div>
           <label class="flex items-center gap-2.5 cursor-pointer select-none">
             <input
               id="card-checkable"
@@ -643,13 +866,26 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
             />
             <span class="text-sm text-gray-600">Make task checkable</span>
           </label>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Card Color <span class="text-gray-400 font-normal">(optional)</span></label>
+            <div class="flex gap-2 flex-wrap items-center" id="card-color-swatches">
+              ${CARD_COLORS.map((c) => `<button type="button" data-color="${c.value}"
+                class="card-color-swatch w-5 h-5 rounded-full border-2 hover:scale-110 transition-transform"
+                style="background:${c.value};border-color:${cardColor === c.value ? '#374151' : 'transparent'};${cardColor === c.value ? `outline:2px solid ${c.value}40;` : ''}"
+                title="${c.label}"></button>`).join('')}
+              <button type="button" id="card-color-clear"
+                class="text-xs text-gray-400 hover:text-gray-600 transition-colors ml-1">Clear</button>
+            </div>
+            <input type="hidden" id="card-color-value" value="${cardColor || ''}" />
+          </div>
           ${isEdit ? `<div id="modal-subtasks-section">${_subtasksSectionInner()}</div>` : ''}
+          <div id="modal-attachments-section">${_attachmentsSectionInner()}</div>
           <div class="flex justify-end gap-2 pt-2">
             <button type="button" id="modal-cancel"
               class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
               Cancel
             </button>
-            <button type="submit"
+            <button type="submit" id="modal-submit-btn"
               class="gold-btn px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
               ${isEdit ? 'Save changes' : 'Create card'}
             </button>
@@ -663,6 +899,31 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   const input = document.getElementById('card-title');
   input.focus();
   _bindSubtaskSectionEvents();
+  _bindAttachmentSectionEvents();
+
+  // Card color swatch selection
+  document.getElementById('card-color-swatches')?.querySelectorAll('.card-color-swatch').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.card-color-swatch').forEach((b) => {
+        b.style.borderColor = 'transparent';
+        b.style.outline = 'none';
+      });
+      btn.style.borderColor = '#374151';
+      btn.style.outline = `2px solid ${btn.dataset.color}40`;
+      selectedCardColor = btn.dataset.color;
+      const hiddenInput = document.getElementById('card-color-value');
+      if (hiddenInput) hiddenInput.value = btn.dataset.color;
+    });
+  });
+  document.getElementById('card-color-clear')?.addEventListener('click', () => {
+    document.querySelectorAll('.card-color-swatch').forEach((b) => {
+      b.style.borderColor = 'transparent';
+      b.style.outline = 'none';
+    });
+    selectedCardColor = null;
+    const hiddenInput = document.getElementById('card-color-value');
+    if (hiddenInput) hiddenInput.value = '';
+  });
 
   // Close on backdrop click or cancel button
   const close = () => { modalRoot.innerHTML = ''; };
@@ -677,21 +938,38 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     const newTitle     = input.value.trim();
     const newDesc      = document.getElementById('card-desc').value.trim();
     const newCheckable = document.getElementById('card-checkable').checked;
+    const newDueDate   = document.getElementById('card-due-date').value || null;
+    const newCardColor = document.getElementById('card-color-value')?.value || null;
     if (!newTitle) return;
 
+    const submitBtn = document.getElementById('modal-submit-btn');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
+
     try {
+      // Upload any pending files
+      let uploadedAttachments = [];
+      if (pendingFiles.length) {
+        const uid = _currentUid || auth_uid();
+        uploadedAttachments = await _uploadAttachments(pendingFiles, uid);
+      }
+      const finalAttachments = [...editAttachments, ...uploadedAttachments];
+
       if (isEdit) {
         const finalSubtasks = editSubtasks.filter((s) => s.title.trim() !== '');
-        await updateCard(cardId, { title: newTitle, description: newDesc, checkable: newCheckable, subtasks: finalSubtasks });
+        await updateCard(cardId, {
+          title: newTitle, description: newDesc, checkable: newCheckable,
+          subtasks: finalSubtasks, dueDate: newDueDate, attachments: finalAttachments,
+          cardColor: newCardColor || null,
+        });
       } else {
-        // Compute order: peek at how many cards are in this column
         const listEl    = document.querySelector(`.card-list[data-column-id="${columnId}"]`);
         const lastOrder = listEl?.children.length ?? 0;
-        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable);
+        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, newCardColor || null);
       }
       close();
     } catch (err) {
       console.error('Card save failed:', err);
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = isEdit ? 'Save changes' : 'Create card'; }
     }
   });
 }
@@ -704,6 +982,56 @@ let _currentUid = null;
 function auth_uid() {
   if (!_currentUid) throw new Error('User not set. Call initCardEvents() first.');
   return _currentUid;
+}
+
+// ─── Delete card modal ────────────────────────────────────────────────────────
+
+function _openDeleteCardModal(cardId, cardTitle) {
+  const modalRoot = document.getElementById('modal-root');
+  if (!modalRoot) return;
+
+  // Escape for display
+  const safeTitle = String(cardTitle).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <div class="flex items-start gap-3 mb-5">
+          <div class="flex-shrink-0 w-9 h-9 rounded-full bg-red-100 flex items-center justify-center">
+            <svg class="w-4.5 h-4.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6
+                   m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-gray-900">Delete card?</h3>
+            <p class="mt-1 text-sm text-gray-500">"<strong>${safeTitle}</strong>" will be permanently deleted.</p>
+          </div>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button id="del-card-cancel"
+            class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
+            Cancel
+          </button>
+          <button id="del-card-confirm"
+            class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors">
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>`;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('del-card-cancel').addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+
+  document.getElementById('del-card-confirm').addEventListener('click', async () => {
+    close();
+    await deleteCard(cardId);
+  });
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
