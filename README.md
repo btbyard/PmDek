@@ -1,10 +1,25 @@
 # PMDek
 
-Lightweight, web-based Kanban project management with light AI assistance.
+AI-powered Kanban project management — fast, Firebase-backed, and designed for solo builders and small teams.
 
-**Stack:** Node.js · Vanilla JS · Tailwind CSS · Firebase (Auth, Firestore, Hosting, Functions) · Gemini
+**Stack:** Node.js · Vanilla JS · Tailwind CSS · Firebase (Auth, Firestore, Storage, Hosting, Functions) · Gemini AI
 
 ---
+
+## Features
+
+- **AI deck generation** — describe a project in plain English; Gemini creates a full board with tasks and subtasks
+- **AI card generation** — describe a single task and the AI fills in the details
+- **Drag-and-drop Kanban** — reorder cards and columns with smooth HTML5 drag-and-drop
+- **Card colors** — color-code cards with a quick swatch picker per column
+- **Deck colors** — color-band each project deck and filter the home screen by color
+- **Due dates** — set due dates on both decks and individual cards
+- **File attachments** — attach files to cards via Firebase Storage
+- **Task & subtask tracking** — checkable tasks with subtasks and progress indicators
+- **Completion timeline** — log and review every task completion per project
+- **Multi-auth** — sign in with Google, GitHub, or email/password
+- **AI rate limit** — free tier capped at 2 AI requests per day (see [MONETIZATION.md](MONETIZATION.md))
+
 
 ## Quick start
 
@@ -118,21 +133,25 @@ pmdek/
 │   ├── main.js        # Entry — wires auth → board lifecycle
 │   ├── firebase.js    # Firebase app init + service exports
 │   ├── auth.js        # Sign-in / sign-out / auth state
-│   ├── board.js       # Board document + column DOM
-│   ├── cards.js       # Card CRUD + real-time sync + modals
+│   ├── board.js       # Board document + column DOM + card-stats query
+│   ├── boards-home.js # Deck home — tile grid, modals, color filter
+│   ├── cards.js       # Card CRUD + real-time sync + modals + color picker
+│   ├── ai-chat.js     # Persistent AI chat sidebar
 │   ├── drag.js        # HTML5 drag-and-drop
-│   └── ai.js          # Gemini callable wrappers + AI modal
+│   └── ai.js          # Gemini callable wrappers + AI modals
 ├── styles/
 │   └── main.css       # Tailwind directives + custom components
 ├── functions/
-│   ├── index.js       # Cloud Functions (AI only)
+│   ├── index.js       # Cloud Functions (generateCard, generateBoard, generateBoardWithTasks)
 │   └── package.json
 ├── index.html
 ├── firebase.json
 ├── firestore.rules
 ├── firestore.indexes.json
+├── storage.rules
 ├── tailwind.config.js
 ├── vite.config.js
+├── MONETIZATION.md
 └── .env.example
 ```
 
@@ -151,15 +170,22 @@ pmdek/
 
 ---
 
-## v0.1 scope
+## Roadmap / feature scope
 
-- [x] Google + GitHub sign-in
-- [x] Auto-created board on first login
-- [x] Three columns: Todo, In Progress, Done
-- [x] Card create / edit / delete
-- [x] Drag-and-drop between and within columns
-- [x] AI card generation (Gemini via Cloud Function)
-- [x] Firebase Hosting deploy
+- [x] Google + GitHub + email sign-in
+- [x] Multi-deck home screen with playing-card tile UI
+- [x] Deck colors, due dates, task/subtask counts on tiles
+- [x] Kanban columns — add, rename, delete, drag-reorder
+- [x] Cards — create, edit, delete, drag-and-drop
+- [x] Card colors, due dates, file attachments, subtasks
+- [x] Task completion logging + Project Timeline modal
+- [x] AI deck generation (Gemini via Cloud Function)
+- [x] AI card generation + persistent chat sidebar
+- [x] AI rate limiting (2 requests/day on free tier)
+- [x] Firebase Storage for file attachments
+- [ ] Pro tier — unlimited AI + team collaboration (see [MONETIZATION.md](MONETIZATION.md))
+- [ ] Deck sharing + real-time multi-user editing
+- [ ] Advanced reports and analytics
 
 ## Contributing
 

@@ -7,31 +7,20 @@
  * in the top-right that opens a rename modal. Clicking the card body opens the board.
  */
 
-import { getUserBoards, createBoard, renameBoard, deleteBoard, archiveBoard, unarchiveBoard, DEFAULT_COLUMNS, setBoardId } from './board.js';
+import { getUserBoards, getCardStatsByUserId, createBoard, renameBoard, updateBoardColor, deleteBoard, archiveBoard, unarchiveBoard, DEFAULT_COLUMNS, setBoardId, DECK_COLORS } from './board.js';
 import { generateBoard, generateBoardWithTasks }            from './ai.js';
-import { createCard }                                       from './cards.js';
+import { createCard, updateAllCardsBackground }             from './cards.js';
 
 // Store the refresh callback so the rename modal can refresh the grid after saving.
 let _onBoardOpen = null;
 let _currentUser = null;
 let _lastBoards = [];
+/** @type {Map<string, {taskCount: number, subtaskCount: number}>} */
+let _lastStats = new Map();
 let _activeTab = 'current'; // 'current' | 'archived'
 let _tabsInited = false;
 const BOARDS_LOAD_TIMEOUT_MS = 7000;
 const BOARD_WRITE_TIMEOUT_MS = 7000;
-
-const DECK_COLORS = [
-  { value: '#6366f1', label: 'Indigo' },
-  { value: '#8b5cf6', label: 'Purple' },
-  { value: '#ec4899', label: 'Pink' },
-  { value: '#ef4444', label: 'Red' },
-  { value: '#f97316', label: 'Orange' },
-  { value: '#d97706', label: 'Amber' },
-  { value: '#22c55e', label: 'Green' },
-  { value: '#14b8a6', label: 'Teal' },
-  { value: '#3b82f6', label: 'Blue' },
-  { value: '#64748b', label: 'Slate' },
-];
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -47,6 +36,7 @@ export async function renderBoardsHome(user, onBoardOpen) {
 
   if (_lastBoards.length === 0) {
     _lastBoards = _loadPersistedBoards(user.uid);
+    _lastStats  = _loadPersistedStats(user.uid);
   }
 
   if (_lastBoards.length > 0) {
@@ -56,13 +46,14 @@ export async function renderBoardsHome(user, onBoardOpen) {
   }
 
   try {
-    const boards = await _withTimeout(
-      getUserBoards(user.uid),
-      BOARDS_LOAD_TIMEOUT_MS,
-      'Loading boards took too long.',
-    );
+    const [boards, stats] = await Promise.all([
+      _withTimeout(getUserBoards(user.uid), BOARDS_LOAD_TIMEOUT_MS, 'Loading boards took too long.'),
+      getCardStatsByUserId(user.uid).catch(() => new Map()),
+    ]);
     _lastBoards = boards;
+    _lastStats  = stats;
     _persistBoards(user.uid, boards);
+    _persistStats(user.uid, stats);
     _renderTiles(root, boards);
   } catch (err) {
     console.error('Load boards failed:', err);
@@ -80,11 +71,18 @@ export async function renderBoardsHome(user, onBoardOpen) {
 export function openCreateBoardModal(user, onCreated) {
   const modalRoot = document.getElementById('modal-root');
 
-  const swatchesHtml = DECK_COLORS.map((c) => `
-    <button type="button" data-color="${c.value}"
-      class="deck-color-swatch w-6 h-6 rounded-full border-2 border-transparent hover:scale-110 transition-transform ring-offset-1"
-      style="background:${c.value}" title="${c.label}"></button>
-  `).join('');
+  const DEFAULT_COLOR = '#111827';
+
+  const swatchesHtml = [
+    { value: DEFAULT_COLOR, label: 'Default' },
+    ...DECK_COLORS,
+  ].map((c) => {
+    const isDefault = c.value === DEFAULT_COLOR;
+    return `<button type="button" data-color="${c.value}"
+      class="deck-color-swatch w-7 h-7 rounded-full border-2 hover:scale-110 transition-transform ring-offset-1 flex-shrink-0"
+      style="background:${c.value};border-color:${isDefault ? '#111827' : 'transparent'}${isDefault ? ';outline:2px solid #11182760;outline-offset:2px' : ''}" title="${c.label}"></button>`;
+  }).join('');
+  const defaultColorVal = DEFAULT_COLOR;
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -92,7 +90,7 @@ export function openCreateBoardModal(user, onCreated) {
         <h3 class="text-lg font-semibold text-gray-800 mb-4">Create Deck</h3>
         <form id="create-board-form" class="flex flex-col gap-4">
           <input id="board-title-input" type="text" placeholder="Deck Name"
-            required maxlength="100"
+            required maxlength="60"
             class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">
@@ -108,7 +106,7 @@ export function openCreateBoardModal(user, onCreated) {
             <div class="flex gap-2 flex-wrap" id="deck-color-swatches">
               ${swatchesHtml}
             </div>
-            <input type="hidden" id="board-color-value" value="" />
+            <input type="hidden" id="board-color-value" value="${defaultColorVal}" />
           </div>
           <div class="flex justify-end gap-2">
             <button type="button" id="create-board-cancel"
@@ -136,8 +134,9 @@ export function openCreateBoardModal(user, onCreated) {
         b.style.outline = 'none';
         b.style.borderColor = 'transparent';
       });
-      btn.style.borderColor = '#374151';
-      btn.style.outline = `2px solid ${btn.dataset.color}40`;
+      btn.style.borderColor = btn.dataset.color;
+      btn.style.outline = `2px solid ${btn.dataset.color}60`;
+      btn.style.outlineOffset = '2px';
       document.getElementById('board-color-value').value = btn.dataset.color;
     });
   });
@@ -341,10 +340,105 @@ function _updateTabUI() {
 
 // ─── Private rendering ────────────────────────────────────────────────────────
 
+function _initColorFilter() {
+  if (_colorFilterInited) return;
+  _colorFilterInited = true;
+
+  const container = document.getElementById('deck-color-filter');
+  if (!container) return;
+
+  const swatchesHtml = DECK_COLORS.map((c) => `
+    <button type="button" data-color-filter="${c.value}"
+      class="deck-filter-swatch w-5 h-5 rounded-full border-2 border-transparent hover:scale-110 transition-transform flex-shrink-0"
+      style="background:${c.value}" title="${c.label}"></button>
+  `).join('');
+
+  container.innerHTML = `
+    <div class="relative" id="deck-color-filter-wrap">
+      <button id="deck-color-filter-btn" type="button"
+        class="w-6 h-6 rounded-full border-2 border-gray-300 hover:border-gray-400 transition-all flex items-center justify-center flex-shrink-0"
+        title="Filter by deck color" style="">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <circle cx="6"  cy="12" r="2.5" fill="currentColor" stroke="none"/>
+          <circle cx="12" cy="7"  r="2.5" fill="currentColor" stroke="none"/>
+          <circle cx="18" cy="12" r="2.5" fill="currentColor" stroke="none"/>
+          <circle cx="12" cy="17" r="2.5" fill="currentColor" stroke="none"/>
+        </svg>
+      </button>
+      <div id="deck-color-filter-popup"
+        class="hidden absolute left-0 top-8 z-30 bg-white border border-gray-200 rounded-xl shadow-xl p-3 min-w-max">
+        <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Filter by color</p>
+        <div class="flex flex-wrap gap-2 mb-2">${swatchesHtml}</div>
+        <button type="button" id="deck-color-filter-clear"
+          class="w-full text-xs text-gray-400 hover:text-gray-700 mt-1 transition-colors">
+          Show all
+        </button>
+      </div>
+    </div>`;
+
+  const btn   = container.querySelector('#deck-color-filter-btn');
+  const popup = container.querySelector('#deck-color-filter-popup');
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    popup.classList.toggle('hidden');
+  });
+
+  popup.addEventListener('click', (e) => {
+    const swatch = e.target.closest('.deck-filter-swatch');
+    if (swatch) {
+      const val = swatch.dataset.colorFilter;
+      _activeColorFilter = (_activeColorFilter === val) ? null : val;
+      _updateColorFilterUI(container, btn, popup);
+      const root = document.getElementById('boards-root');
+      if (root) _renderTiles(root, _lastBoards);
+      popup.classList.add('hidden');
+      return;
+    }
+    if (e.target.closest('#deck-color-filter-clear')) {
+      _activeColorFilter = null;
+      _updateColorFilterUI(container, btn, popup);
+      const root = document.getElementById('boards-root');
+      if (root) _renderTiles(root, _lastBoards);
+      popup.classList.add('hidden');
+    }
+  });
+
+  // Close popup on outside click
+  document.addEventListener('click', (e) => {
+    if (!container.contains(e.target)) popup.classList.add('hidden');
+  });
+
+  _updateColorFilterUI(container, btn, popup);
+}
+
+function _updateColorFilterUI(container, btn, popup) {
+  // If called without btn/popup refs (e.g. from outside), look them up
+  const b = btn ?? container?.querySelector('#deck-color-filter-btn');
+  if (!b) return;
+
+  if (_activeColorFilter) {
+    b.style.background = _activeColorFilter;
+    b.style.borderColor = _activeColorFilter;
+    b.innerHTML = '';
+  } else {
+    b.style.background = '';
+    b.style.borderColor = '';
+    b.innerHTML = `<svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <circle cx="6"  cy="12" r="2.5" fill="currentColor" stroke="none"/>
+      <circle cx="12" cy="7"  r="2.5" fill="currentColor" stroke="none"/>
+      <circle cx="18" cy="12" r="2.5" fill="currentColor" stroke="none"/>
+      <circle cx="12" cy="17" r="2.5" fill="currentColor" stroke="none"/>
+    </svg>`;
+  }
+}
+
 function _renderTiles(root, boards, { instant = false } = {}) {
   root.innerHTML = '';
 
-  const filtered = boards.filter((b) => (_activeTab === 'archived' ? b.archived === true : !b.archived));
+  const filtered = boards.filter((b) =>
+    (_activeTab === 'archived' ? b.archived === true : !b.archived)
+  );
 
   if (filtered.length === 0) {
     root.innerHTML = _activeTab === 'archived'
@@ -364,7 +458,7 @@ function _renderTiles(root, boards, { instant = false } = {}) {
   grid.className = 'boards-grid flex flex-wrap gap-12 justify-center';
 
   filtered.forEach((board, index) => {
-    grid.appendChild(_buildCard(board, index, instant));
+    grid.appendChild(_buildCard(board, index, instant, _lastStats.get(board.id)));
   });
 
   root.appendChild(grid);
@@ -428,14 +522,12 @@ function _renderBoardsNotice(root, message) {
  *  │                  │
  *  └──────────────────┘
  */
-function _buildCard(board, index = 0, instant = false) {
+function _buildCard(board, index = 0, instant = false, stats = null) {
   const wrapper = document.createElement('div');
-  // Fixed playing-card proportions: 160px wide × 220px tall
+  // Fixed playing-card proportions: 160px wide × 224px tall
   wrapper.className = 'board-tile-shell relative group w-40 h-56 flex-shrink-0';
   wrapper.style.setProperty('--tile-index', String(index));
   if (instant) wrapper.classList.add('board-tile-shell-ready');
-
-  const colCount = board.columns?.length ?? 3;
 
   const backLayer1 = document.createElement('div');
   backLayer1.className = 'board-tile-back board-tile-back-1';
@@ -475,7 +567,8 @@ function _buildCard(board, index = 0, instant = false) {
         <h2 class="board-tile-title text-sm font-semibold leading-snug">
         ${escapeHtml(board.title || 'Untitled Deck')}
         </h2>
-        <p class="mt-1 text-xs" style="color:rgba(255,255,255,0.72)">${colCount} Card${colCount !== 1 ? 's' : ''}</p>
+        <p class="mt-1 text-xs" style="color:rgba(255,255,255,0.72)">${stats?.taskCount ?? 0} Card${(stats?.taskCount ?? 0) !== 1 ? 's' : ''}</p>
+        ${stats != null ? `<p class="mt-0.5 text-[10px]" style="color:rgba(255,255,255,0.6)">${stats.taskCount} Task${stats.taskCount !== 1 ? 's' : ''}${stats.subtaskCount > 0 ? ` &bull; ${stats.subtaskCount} Sub-Task${stats.subtaskCount !== 1 ? 's' : ''}` : ''}</p>` : ''}
         ${board.dueDate ? `<p class="mt-0.5 text-[10px]" style="color:rgba(255,255,255,0.5)">Due ${_formatDeckDate(board.dueDate)}</p>` : ''}
       </div>
     </div>
@@ -582,6 +675,12 @@ function _openBoardSettingsMenu(e, board) {
       </svg>
       Rename
     </button>
+    <button data-action="color"
+      class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2">
+      <span class="w-3.5 h-3.5 rounded-full border-2 flex-shrink-0"
+        style="${board.color ? `background:${board.color};border-color:${board.color}` : 'border-color:#d1d5db;background:transparent'}"></span>
+      Change Color
+    </button>
     <button data-action="archive"
       class="w-full text-left px-4 py-2 hover:bg-amber-50 text-amber-700 transition-colors flex items-center gap-2">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -617,6 +716,12 @@ function _openBoardSettingsMenu(e, board) {
     menu.remove();
     document.removeEventListener('click', closeMenu, true);
     _openRenameBoardModal(board);
+  });
+
+  menu.querySelector('[data-action="color"]')?.addEventListener('click', () => {
+    menu.remove();
+    document.removeEventListener('click', closeMenu, true);
+    _openChangeDeckColorModal(board);
   });
 
   menu.querySelector('[data-action="archive"]')?.addEventListener('click', () => {
@@ -692,6 +797,62 @@ function _openRenameBoardModal(board) {
     } catch (err) {
       console.error('Rename board failed:', err);
     }
+  });
+}
+
+function _openChangeDeckColorModal(board) {
+  const modalRoot = document.getElementById('modal-root');
+
+  const swatchesHtml = [
+    { value: null, label: 'None' },
+    ...DECK_COLORS,
+  ].map((c) => {
+    const active = board.color === c.value;
+    const style = c.value
+      ? `background:${c.value}`
+      : 'background:transparent;border:2px dashed #9ca3af';
+    return `<button type="button" data-color="${c.value ?? ''}"
+      class="deck-color-edit-swatch w-7 h-7 rounded-full hover:scale-110 transition-transform"
+      style="${style}${active ? ';outline:2px solid #374151;outline-offset:2px' : ''}" title="${c.label}"></button>`;
+  }).join('');
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-xs p-6">
+        <h3 class="text-base font-semibold text-gray-800 mb-4">Deck Color</h3>
+        <div class="flex flex-wrap gap-2 mb-6">${swatchesHtml}</div>
+        <div class="flex justify-end">
+          <button id="deck-color-cancel"
+            class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('deck-color-cancel').addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+
+  modalRoot.querySelectorAll('.deck-color-edit-swatch').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const newColor = btn.dataset.color || null;
+      close();
+      try {
+        await Promise.all([
+          updateBoardColor(board.id, newColor),
+          updateAllCardsBackground(board.id, newColor),
+        ]);
+        _upsertCachedBoard({ ...board, color: newColor });
+        _persistCurrentBoards();
+        await renderBoardsHome(_currentUser, _onBoardOpen);
+      } catch (err) {
+        console.error('Change deck color failed:', err);
+      }
+    });
   });
 }
 
@@ -877,6 +1038,25 @@ function _loadPersistedBoards(userId) {
 
 function _getBoardsStorageKey(userId) {
   return `pmdek:boards:${userId}`;
+}
+
+function _persistStats(userId, stats) {
+  try {
+    const obj = {};
+    stats.forEach((val, key) => { obj[key] = val; });
+    window.localStorage.setItem(`pmdek:cardstats:${userId}`, JSON.stringify(obj));
+  } catch { /* ignore */ }
+}
+
+function _loadPersistedStats(userId) {
+  try {
+    const raw = window.localStorage.getItem(`pmdek:cardstats:${userId}`);
+    if (!raw) return new Map();
+    const obj = JSON.parse(raw);
+    return new Map(Object.entries(obj));
+  } catch {
+    return new Map();
+  }
 }
 
 function _withTimeout(promise, timeoutMs, message) {

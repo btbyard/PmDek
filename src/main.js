@@ -164,21 +164,40 @@ const _BOARDS_HELP_EXAMPLES = [
   'Design a project plan for a mobile calculator app',
 ];
 
+const _BOARDS_HELP_STEPS = [
+  '1. Describe the project outcome and scope in one sentence.',
+  '2. Include key phases you expect (for example: planning, build, QA, launch).',
+  '3. Mention constraints like deadline, team size, or stack when relevant.',
+  '4. AI creates columns and starter tasks mapped to those phases.',
+];
+
 const _BOARD_HELP_EXAMPLES = [
   'Create a new card for writing unit tests',
   'Add a task to set up CI/CD with GitHub Actions',
-  'Create a subtask for code review on the auth module',
+  'Add sub task testerman to task Fix Bug',
+  'Add task Finish setup to Done',
+  'Add task Validate API retries to In Progress',
   'Add a new task: implement user login',
-  'Create a card for performance testing the dashboard',
+  'Add sub task write edge-case checks to card Build App',
 ];
 
-function _openAiHelpModal(examples, heading) {
+const _BOARD_HELP_STEPS = [
+  '1. If no column is specified, AI defaults to TODO (first column).',
+  '2. To target a column, include: "to Done", "to In Progress", or the exact column name.',
+  '3. To target a specific card as sub-task, use: "add sub task <name> to task <card title>".',
+  '4. Use quotes around card titles when possible for exact matching.',
+];
+
+function _openAiHelpModal(examples, heading, steps = []) {
   const modalRoot = document.getElementById('modal-root');
   const items = examples.map((ex) => `
     <li class="flex items-start gap-2 text-sm text-gray-700">
       <span class="text-amber-500 mt-0.5 flex-shrink-0">✨</span>
       <span class="italic">"${ex}"</span>
     </li>`).join('');
+  const stepsHtml = steps.map((step) => `
+    <li class="text-xs text-gray-600 leading-relaxed">${step}</li>
+  `).join('');
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -187,6 +206,12 @@ function _openAiHelpModal(examples, heading) {
           <span class="text-lg">✨</span>
           <h3 class="text-base font-semibold text-gray-800">${heading}</h3>
         </div>
+        ${steps.length ? `
+          <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5">
+            <p class="text-[11px] font-semibold uppercase tracking-wide text-amber-700 mb-1.5">Inference steps</p>
+            <ol class="list-decimal pl-4 space-y-1">${stepsHtml}</ol>
+          </div>
+        ` : ''}
         <p class="text-xs text-gray-500 mb-3">Here are some example prompts you can type in the AI chat:</p>
         <ul class="flex flex-col gap-2.5 mb-5">${items}</ul>
         <div class="flex justify-end">
@@ -204,10 +229,10 @@ function _openAiHelpModal(examples, heading) {
 }
 
 document.getElementById('ai-board-help-btn')?.addEventListener('click', () => {
-  _openAiHelpModal(_BOARDS_HELP_EXAMPLES, 'Example prompts — Boards');
+  _openAiHelpModal(_BOARDS_HELP_EXAMPLES, 'Example prompts — Boards', _BOARDS_HELP_STEPS);
 });
 document.getElementById('ai-board-help-btn-board')?.addEventListener('click', () => {
-  _openAiHelpModal(_BOARD_HELP_EXAMPLES, 'Example prompts — Board tasks');
+  _openAiHelpModal(_BOARD_HELP_EXAMPLES, 'Example prompts — Board tasks', _BOARD_HELP_STEPS);
 });
 
 document.getElementById('reset-col-widths-btn')?.addEventListener('click', () => {
@@ -256,13 +281,28 @@ async function _openTimelineModal() {
     const { collection, query, where, orderBy, getDocs } = await import('firebase/firestore');
     const { db } = await import('./firebase.js');
 
-    const q = query(
-      collection(db, 'completionLog'),
-      where('boardId', '==', _currentBoardId),
-      orderBy('completedAt', 'desc'),
-    );
-    const snap = await getDocs(q);
-    const logs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    let logs;
+    try {
+      // Preferred: composite index query (boardId + completedAt DESC)
+      const q = query(
+        collection(db, 'completionLog'),
+        where('boardId', '==', _currentBoardId),
+        orderBy('completedAt', 'desc'),
+      );
+      const snap = await getDocs(q);
+      logs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (indexErr) {
+      // Fallback: index still building — query without orderBy, sort client-side
+      console.warn('Timeline composite index not ready, falling back to client sort:', indexErr.message);
+      const q2 = query(
+        collection(db, 'completionLog'),
+        where('boardId', '==', _currentBoardId),
+      );
+      const snap2 = await getDocs(q2);
+      logs = snap2.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.completedAt?.seconds ?? 0) - (a.completedAt?.seconds ?? 0));
+    }
 
     const body = document.getElementById('timeline-body');
     if (!body) return;
@@ -300,7 +340,14 @@ async function _openTimelineModal() {
   } catch (err) {
     console.error('Timeline load failed:', err);
     const body = document.getElementById('timeline-body');
-    if (body) body.innerHTML = '<p class="text-sm text-red-500 py-4 text-center">Failed to load timeline. The index may still be building — try again in a minute.</p>';
+    if (body) body.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-10 text-center gap-3">
+        <p class="text-sm text-red-500">Failed to load timeline.</p>
+        <button id="timeline-retry" class="px-4 py-2 text-xs font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
+          Retry
+        </button>
+      </div>`;
+    document.getElementById('timeline-retry')?.addEventListener('click', () => _openTimelineModal());
   }
 }
 

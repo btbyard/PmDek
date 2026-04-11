@@ -28,9 +28,28 @@ import {
 } from 'firebase/firestore';
 
 import { db } from './firebase.js';
-import { reRenderCards } from './cards.js';
+import { reRenderCards, updateAllCardsBackground } from './cards.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
+
+/** Palette shared across boards-home tile accents and the in-deck color selector. */
+export const DECK_COLORS = [
+  { value: '#6366f1', label: 'Indigo' },
+  { value: '#8b5cf6', label: 'Purple' },
+  { value: '#ec4899', label: 'Pink'   },
+  { value: '#ef4444', label: 'Red'    },
+  { value: '#fdba74', label: 'Peach'  },
+  { value: '#f97316', label: 'Orange' },
+  { value: '#d97706', label: 'Amber'  },
+  { value: '#22c55e', label: 'Green'  },
+  { value: '#14b8a6', label: 'Teal'   },
+  { value: '#7dd3fc', label: 'Sky'    },
+  { value: '#93c5fd', label: 'Light Blue' },
+  { value: '#3b82f6', label: 'Blue'   },
+  { value: '#cbd5e1', label: 'Light Gray' },
+  { value: '#9ca3af', label: 'Gray'   },
+  { value: '#64748b', label: 'Slate'  },
+];
 
 /** Default columns created with every new board. Order value drives left-to-right display. */
 export const DEFAULT_COLUMNS = [
@@ -41,6 +60,9 @@ export const DEFAULT_COLUMNS = [
 
 // Module-level cache — set once after board is loaded, read by cards.js.
 let _boardId = null;
+
+// Track whether the deck-color outside-click listener has been initialised.
+let _deckColorListenerInited = false;
 
 /**
  * Returns the current user's boardId.
@@ -98,6 +120,28 @@ export async function getUserBoards(userId) {
 }
 
 /**
+ * Returns per-board task and subtask counts for all cards owned by a user.
+ *
+ * @param {string} userId
+ * @returns {Promise<Map<string, {taskCount: number, subtaskCount: number}>>}
+ */
+export async function getCardStatsByUserId(userId) {
+  const q    = query(collection(db, 'cards'), where('userId', '==', userId));
+  const snap = await getDocs(q);
+  /** @type {Map<string, {taskCount: number, subtaskCount: number}>} */
+  const stats = new Map();
+  snap.docs.forEach((d) => {
+    const { boardId, subtasks } = d.data();
+    if (!boardId) return;
+    const entry = stats.get(boardId) ?? { taskCount: 0, subtaskCount: 0 };
+    entry.taskCount += 1;
+    entry.subtaskCount += Array.isArray(subtasks) ? subtasks.length : 0;
+    stats.set(boardId, entry);
+  });
+  return stats;
+}
+
+/**
  * Renames a board document.
  * @param {string} boardId
  * @param {string} newTitle
@@ -105,6 +149,36 @@ export async function getUserBoards(userId) {
  */
 export async function renameBoard(boardId, newTitle) {
   await updateDoc(doc(db, 'boards', boardId), { title: newTitle.trim() || 'My Board' });
+}
+
+/**
+ * Updates the colour of a board.
+ * @param {string} boardId
+ * @param {string|null} color  Hex string or null to clear.
+ * @returns {Promise<void>}
+ */
+export async function updateBoardColor(boardId, color) {
+  await updateDoc(doc(db, 'boards', boardId), { color: color || null });
+}
+
+/**
+ * Updates the board column surface color used for column panels.
+ * @param {string} boardId
+ * @param {string|null} color
+ * @returns {Promise<void>}
+ */
+export async function updateBoardColumnColor(boardId, color) {
+  await updateDoc(doc(db, 'boards', boardId), { columnBgColor: color || null });
+}
+
+/**
+ * Updates the board-level default task background color.
+ * @param {string} boardId
+ * @param {string|null} color
+ * @returns {Promise<void>}
+ */
+export async function updateBoardTaskBgColor(boardId, color) {
+  await updateDoc(doc(db, 'boards', boardId), { taskBgColor: color || null });
 }
 
 /**
@@ -208,12 +282,13 @@ export function renderBoard(board) {
 
   // Centered scrollable columns wrapper
   const columnsWrapper = document.createElement('div');
-  columnsWrapper.className = 'flex gap-4 items-start justify-center overflow-x-auto pb-4 px-4';
+  columnsWrapper.className = 'flex gap-4 items-start justify-center overflow-x-auto overflow-y-visible pb-4 px-4';
   columnsWrapper.id = 'columns-wrapper';
 
   columns.forEach((col) => {
     columnsWrapper.appendChild(buildColumnEl(col, board.id, columns));
   });
+  _applyColumnSurfaceColor(board.columnBgColor, columnsWrapper);
 
   // ── Add-column "+" button ────────────────────────────────────────────────
   const addColBtn = document.createElement('button');
@@ -232,10 +307,184 @@ export function renderBoard(board) {
     </svg>
   `;
   addColBtn.addEventListener('click', () => createColumnBlock());
-  columnsWrapper.appendChild(addColBtn);
+  const actionStack = document.createElement('div');
+  actionStack.className = 'flex flex-col gap-2 flex-shrink-0 self-start';
+  actionStack.appendChild(addColBtn);
+
+  // ── Global column-panel color selector (top button) ───────────────────
+  const colBgWrap = document.createElement('div');
+  colBgWrap.className = 'relative flex-shrink-0 self-start';
+
+  const colBgBtn = document.createElement('button');
+  colBgBtn.id        = 'deck-column-bg-btn';
+  colBgBtn.className = 'w-10 h-10 mt-1 flex items-center justify-center rounded-full border-2 transition-all duration-150';
+  _applyDeckColorBtnStyle(colBgBtn, board.columnBgColor, {
+    title: 'Set column background color',
+    icon: 'column',
+  });
+
+  const paletteSwatchesHtml = [
+    { value: null,  label: 'Default (Black)' },
+    ...DECK_COLORS,
+  ].map((c) => {
+    const active = board.columnBgColor === c.value;
+    const style  = c.value
+      ? `background:${c.value}`
+      : 'background:#050506;border:2px solid rgba(255,255,255,0.45)';
+    return `<button type="button" data-color="${c.value ?? ''}"
+      class="deck-column-swatch w-7 h-7 rounded-full flex-shrink-0 hover:scale-110 transition-transform${active ? ' ring-2 ring-offset-2' : ''}"
+      style="${style}${active && c.value ? `;outline:2px solid ${c.value};outline-offset:2px` : ''}" title="${c.label ?? 'None'}"></button>`;
+  }).join('');
+
+  const colBgPopup = document.createElement('div');
+  colBgPopup.id        = 'deck-column-bg-popup';
+  colBgPopup.className = 'deck-global-color-popup hidden absolute right-0 top-12 z-40 bg-white border border-gray-200 rounded-xl shadow-xl p-3 min-w-max';
+  colBgPopup.innerHTML = `
+    <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Column panel color</p>
+    <div class="flex flex-wrap gap-2" style="max-width:200px">${paletteSwatchesHtml}</div>
+  `;
+
+  colBgBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.querySelectorAll('.deck-global-color-popup').forEach((p) => p.classList.add('hidden'));
+    colBgPopup.classList.toggle('hidden');
+  });
+
+  colBgPopup.addEventListener('click', async (e) => {
+    const swatch = e.target.closest('.deck-column-swatch');
+    if (!swatch) return;
+    const newColor = swatch.dataset.color || null;
+    colBgPopup.classList.add('hidden');
+    _applyDeckColorBtnStyle(colBgBtn, newColor, {
+      title: 'Set column background color',
+      icon: 'column',
+    });
+    board.columnBgColor = newColor;
+    _applyColumnSurfaceColor(newColor, columnsWrapper);
+    try {
+      await updateBoardColumnColor(board.id, newColor);
+    } catch (err) {
+      console.error('Failed to update column panel color:', err);
+    }
+  });
+
+  // ── Global task-card background selector (second button) ───────────────
+  const taskBgWrap = document.createElement('div');
+  taskBgWrap.className = 'relative flex-shrink-0 self-start';
+
+  const taskBgBtn = document.createElement('button');
+  taskBgBtn.id        = 'deck-task-bg-btn';
+  taskBgBtn.className = 'w-10 h-10 flex items-center justify-center rounded-full border-2 transition-all duration-150';
+  _applyDeckColorBtnStyle(taskBgBtn, board.taskBgColor, {
+    title: 'Set task block color',
+    icon: 'task',
+  });
+
+  const taskBgSwatchesHtml = [
+    { value: null,  label: 'Default (Black)' },
+    ...DECK_COLORS,
+  ].map((c) => {
+    const active = board.taskBgColor === c.value;
+    const style  = c.value
+      ? `background:${c.value}`
+      : 'background:#050506;border:2px solid rgba(255,255,255,0.45)';
+    return `<button type="button" data-color="${c.value ?? ''}"
+      class="deck-task-bg-swatch w-7 h-7 rounded-full flex-shrink-0 hover:scale-110 transition-transform${active ? ' ring-2 ring-offset-2' : ''}"
+      style="${style}${active && c.value ? `;outline:2px solid ${c.value};outline-offset:2px` : ''}" title="${c.label ?? 'None'}"></button>`;
+  }).join('');
+
+  const taskBgPopup = document.createElement('div');
+  taskBgPopup.id        = 'deck-task-bg-popup';
+  taskBgPopup.className = 'deck-global-color-popup hidden absolute right-0 top-10 z-40 bg-white border border-gray-200 rounded-xl shadow-xl p-3 min-w-max';
+  taskBgPopup.innerHTML = `
+    <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Task block color</p>
+    <div class="flex flex-wrap gap-2" style="max-width:200px">${taskBgSwatchesHtml}</div>
+  `;
+
+  taskBgBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.querySelectorAll('.deck-global-color-popup').forEach((p) => p.classList.add('hidden'));
+    taskBgPopup.classList.toggle('hidden');
+  });
+
+  taskBgPopup.addEventListener('click', async (e) => {
+    const swatch = e.target.closest('.deck-task-bg-swatch');
+    if (!swatch) return;
+    const newColor = swatch.dataset.color || null;
+    taskBgPopup.classList.add('hidden');
+    _applyDeckColorBtnStyle(taskBgBtn, newColor, {
+      title: 'Set task block color',
+      icon: 'task',
+    });
+    board.taskBgColor = newColor;
+    try {
+      await Promise.all([
+        updateBoardTaskBgColor(board.id, newColor),
+        updateAllCardsBackground(board.id, newColor),
+      ]);
+    } catch (err) {
+      console.error('Failed to update task block color:', err);
+    }
+  });
+
+  _initDeckColorListener();
+  colBgWrap.appendChild(colBgBtn);
+  colBgWrap.appendChild(colBgPopup);
+  taskBgWrap.appendChild(taskBgBtn);
+  taskBgWrap.appendChild(taskBgPopup);
+  actionStack.appendChild(colBgWrap);
+  actionStack.appendChild(taskBgWrap);
+  columnsWrapper.appendChild(actionStack);
 
   boardRoot.appendChild(columnsWrapper);
   _initColumnDrag(board.id, columns);
+}
+
+/** Applies visual style to the deck color toggle button. */
+function _applyDeckColorBtnStyle(btn, color, opts = {}) {
+  const title = opts.title || 'Set color';
+  const icon = opts.icon || 'dots';
+  if (color) {
+    btn.style.background   = color;
+    btn.style.borderColor  = color;
+    btn.style.borderStyle  = 'solid';
+    btn.style.boxShadow    = '0 4px 10px rgba(0,0,0,0.15)';
+    btn.innerHTML          = '';
+    btn.title              = title;
+  } else {
+    // Unset means default dark surface in this UI.
+    btn.style.background   = '#050506';
+    btn.style.borderColor  = 'rgba(255,255,255,0.45)';
+    btn.style.borderStyle  = 'solid';
+    btn.style.boxShadow    = '0 4px 12px rgba(0,0,0,0.12)';
+    btn.title              = title;
+    btn.innerHTML = '';
+  }
+}
+
+function _applyColumnSurfaceColor(color, scopeEl = document) {
+  const columns = scopeEl.querySelectorAll('.column');
+  columns.forEach((colEl) => {
+    if (color) {
+      colEl.style.background = `linear-gradient(165deg, ${color}f0 0%, ${color}c9 55%, ${color}a8 100%)`;
+      colEl.style.borderColor = 'rgba(255,255,255,0.22)';
+    } else {
+      colEl.style.background = '';
+      colEl.style.borderColor = '';
+    }
+  });
+}
+
+/** Registers a single document click listener to close the deck-color popup. */
+function _initDeckColorListener() {
+  if (_deckColorListenerInited) return;
+  _deckColorListenerInited = true;
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#deck-column-bg-btn') && !e.target.closest('#deck-column-bg-popup')
+        && !e.target.closest('#deck-task-bg-btn') && !e.target.closest('#deck-task-bg-popup')) {
+      document.querySelectorAll('.deck-global-color-popup').forEach((p) => p.classList.add('hidden'));
+    }
+  });
 }
 
 /**

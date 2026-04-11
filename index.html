@@ -14,150 +14,140 @@
 <body class="h-full flex flex-col">
 
   <!-- ── 1. Landing / Sign-in view ───────────────────────────────────────── -->
-  <div id="landing-view" class="flex-1 flex flex-col lg:flex-row min-h-screen">
-
-    <!-- Left: Marketing hero -->
-    <div class="flex-1 flex flex-col justify-center px-8 py-12 lg:px-16
-                bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white">
-
-      <!-- Logo -->
-      <div class="flex items-center gap-3 mb-10">
-        <img src="/pmdeklogo2.png" alt="PMDek" class="h-10 w-auto" />
-        <span class="text-2xl font-bold tracking-tight">
-          <span class="text-brand-400">PM</span><span class="text-white">Dek</span>
-        </span>
-      </div>
-
-      <!-- Headline -->
-      <h1 class="text-4xl lg:text-5xl font-extrabold leading-tight mb-4 max-w-lg">
-        Ship projects,<br/>
-        <span class="text-brand-400">not paperwork.</span>
-      </h1>
-      <p class="text-gray-400 text-lg max-w-md mb-10 leading-relaxed">
-        A fast, AI-powered Kanban board. Create entire project decks in seconds —
-        just describe what you're building.
-      </p>
-
-      <!-- Feature highlights -->
-      <ul class="flex flex-col gap-4 max-w-sm">
-        <li class="flex items-start gap-3">
-          <span class="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center">
-            <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
-            </svg>
-          </span>
-          <div>
-            <p class="text-sm font-semibold text-white">AI deck generation</p>
-            <p class="text-xs text-gray-500">Describe a project; get a full board with tasks instantly.</p>
-          </div>
-        </li>
-        <li class="flex items-start gap-3">
-          <span class="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center">
-            <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
-            </svg>
-          </span>
-          <div>
-            <p class="text-sm font-semibold text-white">Due dates &amp; attachments</p>
-            <p class="text-xs text-gray-500">Keep deadlines visible and files attached to every card.</p>
-          </div>
-        </li>
-        <li class="flex items-start gap-3">
-          <span class="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center">
-            <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
-            </svg>
-          </span>
-          <div>
-            <p class="text-sm font-semibold text-white">Drag-and-drop Kanban</p>
-            <p class="text-xs text-gray-500">Move tasks between columns with subtasks and progress tracking.</p>
-          </div>
-        </li>
-        <li class="flex items-start gap-3">
-          <span class="mt-0.5 flex-shrink-0 w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center">
-            <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
-            </svg>
-          </span>
-          <div>
-            <p class="text-sm font-semibold text-white">Built on Firebase</p>
-            <p class="text-xs text-gray-500">Real-time sync, secure auth, and cloud storage — free to start.</p>
-          </div>
-        </li>
-      </ul>
-
-      <p class="mt-12 text-xs text-gray-600">Open source · Powered by Gemini AI</p>
+  <div id="landing-view" class="flex-1 min-h-screen relative overflow-hidden bg-[#f7f8fc] flex-col">
+    <div class="pointer-events-none absolute inset-0">
+      <div class="absolute top-20 -right-24 w-[480px] h-[480px] rounded-full" style="background:radial-gradient(circle, rgba(59,130,246,0.18), rgba(59,130,246,0));"></div>
+      <div class="absolute bottom-0 left-1/3 w-[620px] h-[320px] rounded-full" style="background:radial-gradient(circle, rgba(15,23,42,0.08), rgba(15,23,42,0));"></div>
     </div>
 
-    <!-- Right: Auth form -->
-    <div class="flex items-center justify-center px-8 py-12 bg-white lg:w-[420px] lg:flex-none">
-      <div class="w-full max-w-sm">
-
-        <div class="mb-7 text-center lg:text-left">
-          <h2 class="text-2xl font-bold text-gray-900">Get started</h2>
-          <p class="mt-1 text-sm text-gray-500">Sign in or create a free account.</p>
-        </div>
-
-        <p id="auth-error" class="hidden mb-4 text-sm rounded-lg px-4 py-2"></p>
-
-        <div class="flex flex-col gap-3">
-
-          <button id="google-sign-in" class="btn-signin">
-            <svg class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-            </svg>
-            Sign in with Google
-          </button>
-
-          <button id="github-sign-in" class="btn-signin">
-            <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path fill-rule="evenodd" clip-rule="evenodd"
-                d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482
-                   0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462
-                   -1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529
-                   2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943
-                   0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75
-                   1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025
-                   2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842
-                   -2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743
-                   0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
-            </svg>
-            Sign in with GitHub
-          </button>
-
-          <div class="flex items-center gap-3 my-1">
-            <div class="flex-1 h-px bg-gray-200"></div>
-            <span class="text-xs text-gray-400">or</span>
-            <div class="flex-1 h-px bg-gray-200"></div>
-          </div>
-
-          <form id="email-auth-form" class="flex flex-col gap-2 text-left">
-            <input id="email-input" type="email" autocomplete="email" placeholder="Email"
-              required class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-            <input id="password-input" type="password" autocomplete="current-password" placeholder="Password"
-              required minlength="6" class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-            <button id="auth-submit-btn" type="submit"
-              class="gold-btn w-full py-2.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors">
-              Sign in
-            </button>
-          </form>
-
-          <div class="flex flex-col gap-1 items-center">
-            <button id="forgot-password-btn" class="text-xs text-gray-400 hover:text-brand-600 transition-colors">
-              Forgot password?
-            </button>
-            <button id="auth-toggle-btn" class="text-xs text-gray-400 hover:text-brand-600 transition-colors">
-              Don't have an account? Create one
-            </button>
-          </div>
-
-        </div>
+    <header class="sticky top-0 z-40 w-full bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-2">
+        <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-9 w-auto" />
+        <span class="text-xl font-bold tracking-tight text-slate-900">PM<span style="color:#b87900">Dek</span></span>
       </div>
-    </div>
+      <a href="#auth-panel" class="text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors">Sign in</a>
+    </header>
 
+    <main class="relative z-10 max-w-6xl mx-auto w-full px-6 md:px-10 py-12 lg:py-16 grid lg:grid-cols-[1.05fr_0.95fr] gap-10 items-start">
+      <section>
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide mb-6"
+          style="color:#8a5a00;background:#fff3d8;border:1px solid #f3d497;">
+          ✦ AI-powered project management
+        </div>
+
+        <h1 class="text-4xl md:text-5xl xl:text-6xl font-extrabold leading-[1.02] tracking-tight text-slate-900 max-w-2xl">
+          Ship projects,
+          <span class="block" style="color:#b87900;">not paperwork.</span>
+        </h1>
+        <p class="mt-5 text-lg text-slate-600 max-w-xl leading-relaxed">
+          PMDek turns plain-English requests into structured boards, tasks, and subtasks so you can plan faster and deliver with confidence.
+        </p>
+
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="#auth-panel" class="gold-btn inline-flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold text-white">
+            Start free
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+          </a>
+          <button type="button" class="px-5 py-3 rounded-xl text-sm font-semibold text-slate-700 border border-slate-300 bg-white hover:bg-slate-50 transition-colors">
+            See how it works
+          </button>
+        </div>
+
+        <div class="mt-10 grid sm:grid-cols-2 gap-4 max-w-2xl">
+          <div class="rounded-2xl p-5 bg-white/90 border border-slate-200 shadow-sm">
+            <p class="text-sm font-semibold text-slate-900 mb-1">AI Deck Generation</p>
+            <p class="text-sm text-slate-600">Create full PM decks from one sentence with realistic starter tasks.</p>
+          </div>
+          <div class="rounded-2xl p-5 bg-white/90 border border-slate-200 shadow-sm">
+            <p class="text-sm font-semibold text-slate-900 mb-1">Smart Task Placement</p>
+            <p class="text-sm text-slate-600">Ask for TODO, In Progress, Done, or card-specific subtasks in natural language.</p>
+          </div>
+          <div class="rounded-2xl p-5 bg-white/90 border border-slate-200 shadow-sm">
+            <p class="text-sm font-semibold text-slate-900 mb-1">Timeline + Due Dates</p>
+            <p class="text-sm text-slate-600">Track deadlines and completion velocity in one place.</p>
+          </div>
+          <div class="rounded-2xl p-5 bg-white/90 border border-slate-200 shadow-sm">
+            <p class="text-sm font-semibold text-slate-900 mb-1">Subtasks + Attachments</p>
+            <p class="text-sm text-slate-600">Capture details per card without cluttering your board.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="auth-panel" class="w-full max-w-[440px] lg:ml-auto">
+        <div class="rounded-3xl p-8 md:p-9 bg-white border border-slate-200 shadow-[0_20px_45px_rgba(15,23,42,0.12)]">
+          <div class="mb-5 flex items-center justify-center gap-2.5">
+            <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-7 w-auto" />
+            <span class="text-lg font-bold tracking-tight text-slate-900">PM<span style="color:#b87900">Dek</span></span>
+          </div>
+          <div class="mb-7 text-center">
+            <h2 class="text-3xl font-bold text-slate-900">Get started free</h2>
+            <p class="mt-1.5 text-sm text-slate-500">No credit card required.</p>
+          </div>
+
+          <p id="auth-error" class="hidden mb-4 text-sm rounded-xl px-4 py-2 text-red-700 bg-red-50 border border-red-200"></p>
+
+          <div class="flex flex-col gap-3">
+            <button id="google-sign-in" class="btn-signin">
+              <svg class="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+              </svg>
+              Continue with Google
+            </button>
+
+            <button id="github-sign-in" class="btn-signin">
+              <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill-rule="evenodd" clip-rule="evenodd"
+                  d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482
+                     0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462
+                     -1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529
+                     2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943
+                     0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75
+                     1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025
+                     2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842
+                     -2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743
+                     0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
+              </svg>
+              Continue with GitHub
+            </button>
+
+            <div class="flex items-center gap-3 my-1">
+              <div class="flex-1 h-px bg-slate-200"></div>
+              <span class="text-xs text-slate-400">or email</span>
+              <div class="flex-1 h-px bg-slate-200"></div>
+            </div>
+
+            <form id="email-auth-form" class="flex flex-col gap-2 text-left">
+              <input id="email-input" type="email" autocomplete="email" placeholder="Email"
+                required class="w-full rounded-xl text-sm text-slate-800 placeholder-slate-400 border border-slate-300 focus:ring-brand-500 focus:border-brand-500"
+                style="padding:0.625rem 0.875rem" />
+              <input id="password-input" type="password" autocomplete="current-password" placeholder="Password"
+                required minlength="6" class="w-full rounded-xl text-sm text-slate-800 placeholder-slate-400 border border-slate-300 focus:ring-brand-500 focus:border-brand-500"
+                style="padding:0.625rem 0.875rem" />
+              <button id="auth-submit-btn" type="submit"
+                class="gold-btn w-full py-2.5 rounded-xl text-sm font-semibold text-white transition-colors mt-1">
+                Sign in
+              </button>
+            </form>
+
+            <div class="flex flex-col gap-1 items-center mt-1">
+              <button id="forgot-password-btn" class="text-xs text-slate-500 hover:text-slate-800 transition-colors">
+                Forgot password?
+              </button>
+              <button id="auth-toggle-btn" class="text-xs text-slate-500 hover:text-slate-800 transition-colors">
+                Don't have an account? Create one
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="relative z-10 text-center pb-8 text-xs text-slate-500">
+      Open source · Powered by Gemini AI
+    </footer>
   </div>
 
   <!-- ── 2. Boards home view ──────────────────────────────────────────────── -->
@@ -186,7 +176,9 @@
       <div class="max-w-5xl mx-auto px-6 py-10">
 
         <div class="flex items-center justify-between mb-6">
-          <h1 class="text-2xl font-semibold text-gray-800">Project Management Decks</h1>
+          <div class="flex items-center gap-3">
+            <h1 class="text-2xl font-semibold text-gray-800">Project Management Decks</h1>
+          </div>
           <div class="flex items-center gap-2" id="boards-action-btns">
             <button id="ai-board-btn"
               class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-900

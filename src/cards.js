@@ -23,6 +23,7 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  getDocs,
   doc,
   serverTimestamp,
 } from 'firebase/firestore';
@@ -36,10 +37,15 @@ const CARD_COLORS = [
   { value: '#8b5cf6', label: 'Purple' },
   { value: '#ec4899', label: 'Pink' },
   { value: '#ef4444', label: 'Red' },
+  { value: '#fdba74', label: 'Peach' },
   { value: '#f97316', label: 'Orange' },
   { value: '#22c55e', label: 'Green' },
   { value: '#14b8a6', label: 'Teal' },
+  { value: '#7dd3fc', label: 'Sky' },
+  { value: '#93c5fd', label: 'Light Blue' },
   { value: '#3b82f6', label: 'Blue' },
+  { value: '#cbd5e1', label: 'Light Gray' },
+  { value: '#9ca3af', label: 'Gray' },
   { value: '#f59e0b', label: 'Amber' },
   { value: '#64748b', label: 'Slate' },
 ];
@@ -108,7 +114,7 @@ export function reRenderCards() {
  * @param {number} [order=0]
  * @returns {Promise<string>} New card document ID
  */
-export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null) {
+export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null) {
   const boardId = getBoardId();
   const ref = await addDoc(collection(db, 'cards'), {
     boardId,
@@ -122,6 +128,7 @@ export async function createCard(columnId, title, description = '', order = 0, c
     dueDate:     dueDate || null,
     attachments: attachments,
     cardColor:   cardColor || null,
+    cardBgColor: cardBgColor || null,
     order,
     cardHeight: 82,
     createdAt:   serverTimestamp(),
@@ -152,6 +159,30 @@ export async function updateCard(cardId, updates) {
  */
 export async function deleteCard(cardId) {
   await deleteDoc(doc(db, 'cards', cardId));
+}
+
+/**
+ * Sets cardColor on every card belonging to the given board.
+ * @param {string} boardId
+ * @param {string|null} color  Hex string or null to clear.
+ * @returns {Promise<void>}
+ */
+export async function updateAllCardsColor(boardId, color) {
+  const q    = query(collection(db, 'cards'), where('boardId', '==', boardId));
+  const snap = await getDocs(q);
+  await Promise.all(snap.docs.map((d) => updateDoc(d.ref, { cardColor: color || null })));
+}
+
+/**
+ * Sets cardBgColor on every card belonging to the given board.
+ * @param {string} boardId
+ * @param {string|null} color  Hex string or null to clear.
+ * @returns {Promise<void>}
+ */
+export async function updateAllCardsBackground(boardId, color) {
+  const q    = query(collection(db, 'cards'), where('boardId', '==', boardId));
+  const snap = await getDocs(q);
+  await Promise.all(snap.docs.map((d) => updateDoc(d.ref, { cardBgColor: color || null })));
 }
 
 /**
@@ -237,6 +268,11 @@ function buildCardEl(card) {
   el.dataset.dueDate  = dueDate || '';
   el.dataset.attachments = JSON.stringify(attachments);
   el.dataset.cardColor = card.cardColor || '';
+  el.dataset.cardBgColor = card.cardBgColor || '';
+
+  if (card.cardBgColor) {
+    el.style.background = `linear-gradient(160deg, ${card.cardBgColor}f0 0%, ${card.cardBgColor}c7 70%, ${card.cardBgColor}a3 100%)`;
+  }
 
   // Apply card accent color as a colored left border
   if (card.cardColor) {
@@ -374,6 +410,14 @@ export function initCardEvents(user) {
 
   const board = document.getElementById('board-root');
 
+  // Close any open column color popups when clicking outside them
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.col-quick-color-wrap') && !e.target.closest('.col-quick-bg-wrap')) {
+      document.querySelectorAll('.col-quick-color-popup').forEach((p) => p.classList.add('hidden'));
+      document.querySelectorAll('.col-quick-bg-popup').forEach((p) => p.classList.add('hidden'));
+    }
+  });
+
   board.addEventListener('click', async (e) => {
     // ── Toggle task complete ─────────────────────────────────────────────
     const taskCheck = e.target.closest('.task-check');
@@ -415,10 +459,97 @@ export function initCardEvents(user) {
       return;
     }
 
+    // ── Quick column card-color trigger button ────────────────────────────
+    const quickBtn = e.target.closest('.col-quick-color-btn');
+    if (quickBtn) {
+      const popup = quickBtn.parentElement?.querySelector('.col-quick-color-popup');
+      if (popup) {
+        popup.classList.toggle('hidden');
+        e.stopPropagation();
+      }
+      return;
+    }
+
+    // ── Quick column card-background trigger button ─────────────────────
+    const quickBgBtn = e.target.closest('.col-quick-bg-btn');
+    if (quickBgBtn) {
+      const popup = quickBgBtn.parentElement?.querySelector('.col-quick-bg-popup');
+      if (popup) {
+        popup.classList.toggle('hidden');
+        e.stopPropagation();
+      }
+      return;
+    }
+
+    // ── Quick column card-color swatch (inside popup) ─────────────────────
+    const quickSwatch = e.target.closest('.col-quick-swatch');
+    if (quickSwatch) {
+      const wrap = quickSwatch.closest('.col-quick-color-wrap');
+      const btn  = wrap?.querySelector('.col-quick-color-btn');
+      const popup = wrap?.querySelector('.col-quick-color-popup');
+      if (!btn) return;
+      const prev = btn.dataset.selectedColor;
+      const next = quickSwatch.dataset.color;
+      const selected = (prev === next) ? '' : next;
+      btn.dataset.selectedColor = selected;
+      // Update trigger button appearance
+      if (selected) {
+        btn.style.background = selected;
+        btn.style.borderColor = selected;
+        btn.innerHTML = '';
+      } else {
+        btn.style.background = '#050506';
+        btn.style.borderColor = 'rgba(255,255,255,0.4)';
+        btn.innerHTML = `<svg class="col-quick-color-icon w-2.5 h-2.5 text-white/40" fill="currentColor" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.5"/><circle cx="12" cy="7" r="2.5"/><circle cx="18" cy="12" r="2.5"/><circle cx="12" cy="17" r="2.5"/></svg>`;
+      }
+      // Highlight active swatch
+      wrap?.querySelectorAll('.col-quick-swatch').forEach((s) => {
+        const active = selected && s.dataset.color === selected;
+        s.style.outline = active ? `2px solid ${s.dataset.color || 'white'}` : '';
+        s.style.outlineOffset = active ? '2px' : '';
+      });
+      popup?.classList.add('hidden');
+      return;
+    }
+
+    // ── Quick column card-background swatch (inside popup) ──────────────
+    const quickBgSwatch = e.target.closest('.col-quick-bg-swatch');
+    if (quickBgSwatch) {
+      const wrap = quickBgSwatch.closest('.col-quick-bg-wrap');
+      const btn  = wrap?.querySelector('.col-quick-bg-btn');
+      const popup = wrap?.querySelector('.col-quick-bg-popup');
+      if (!btn) return;
+      const prev = btn.dataset.selectedColor;
+      const next = quickBgSwatch.dataset.color;
+      const selected = (prev === next) ? '' : next;
+      btn.dataset.selectedColor = selected;
+      if (selected) {
+        btn.style.background = selected;
+        btn.style.borderColor = selected;
+        btn.innerHTML = '';
+      } else {
+        btn.style.background = '#050506';
+        btn.style.borderColor = 'rgba(255,255,255,0.4)';
+        btn.innerHTML = `<svg class="col-quick-bg-icon w-2.5 h-2.5 text-white/40" fill="currentColor" viewBox="0 0 24 24"><rect x="5" y="7" width="14" height="10" rx="2"/></svg>`;
+      }
+      wrap?.querySelectorAll('.col-quick-bg-swatch').forEach((s) => {
+        const active = selected && s.dataset.color === selected;
+        s.style.outline = active ? `2px solid ${s.dataset.color || 'white'}` : '';
+        s.style.outlineOffset = active ? '2px' : '';
+      });
+      popup?.classList.add('hidden');
+      return;
+    }
+
     // ── Add card ──────────────────────────────────────────────────────────
     const addBtn = e.target.closest('.add-card-btn');
     if (addBtn) {
-      openCardModal({ columnId: addBtn.dataset.columnId });
+      const colEl = addBtn.closest('.column');
+      const colorBtn = colEl?.querySelector('.col-quick-color-btn');
+      const bgBtn = colEl?.querySelector('.col-quick-bg-btn');
+      const preColor = colorBtn?.dataset?.selectedColor || null;
+      const preBgColor = bgBtn?.dataset?.selectedColor || null;
+      openCardModal({ columnId: addBtn.dataset.columnId, cardColor: preColor || null, cardBgColor: preBgColor || null });
       return;
     }
 
@@ -441,6 +572,7 @@ export function initCardEvents(user) {
         dueDate:     cardEl.dataset.dueDate || null,
         attachments,
         cardColor:   cardEl.dataset.cardColor || null,
+        cardBgColor: cardEl.dataset.cardBgColor || null,
       });
       return;
     }
@@ -656,7 +788,7 @@ async function _uploadAttachments(files, userId) {
  *
  * @param {{ columnId?: string, cardId?: string, title?: string, description?: string }} opts
  */
-function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null }) {
+function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null }) {
   const modalRoot = document.getElementById('modal-root');
   const isEdit    = Boolean(cardId);
 
@@ -668,6 +800,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   let pendingFiles = [];
   // Selected card color
   let selectedCardColor = cardColor || null;
+  let selectedCardBgColor = cardBgColor || null;
 
   const _subtaskRowHtml = (s) => `
     <li class="flex items-center gap-2 group" data-subtask-id="${escapeHtml(s.id)}">
@@ -878,6 +1011,18 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
             </div>
             <input type="hidden" id="card-color-value" value="${cardColor || ''}" />
           </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Card Background <span class="text-gray-400 font-normal">(optional)</span></label>
+            <div class="flex gap-2 flex-wrap items-center" id="card-bg-swatches">
+              ${CARD_COLORS.map((c) => `<button type="button" data-color="${c.value}"
+                class="card-bg-swatch w-5 h-5 rounded-full border-2 hover:scale-110 transition-transform"
+                style="background:${c.value};border-color:${cardBgColor === c.value ? '#374151' : 'transparent'};${cardBgColor === c.value ? `outline:2px solid ${c.value}40;` : ''}"
+                title="${c.label}"></button>`).join('')}
+              <button type="button" id="card-bg-clear"
+                class="text-xs text-gray-400 hover:text-gray-600 transition-colors ml-1">Clear</button>
+            </div>
+            <input type="hidden" id="card-bg-value" value="${cardBgColor || ''}" />
+          </div>
           ${isEdit ? `<div id="modal-subtasks-section">${_subtasksSectionInner()}</div>` : ''}
           <div id="modal-attachments-section">${_attachmentsSectionInner()}</div>
           <div class="flex justify-end gap-2 pt-2">
@@ -925,6 +1070,29 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     if (hiddenInput) hiddenInput.value = '';
   });
 
+  document.getElementById('card-bg-swatches')?.querySelectorAll('.card-bg-swatch').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.card-bg-swatch').forEach((b) => {
+        b.style.borderColor = 'transparent';
+        b.style.outline = 'none';
+      });
+      btn.style.borderColor = '#374151';
+      btn.style.outline = `2px solid ${btn.dataset.color}40`;
+      selectedCardBgColor = btn.dataset.color;
+      const hiddenInput = document.getElementById('card-bg-value');
+      if (hiddenInput) hiddenInput.value = btn.dataset.color;
+    });
+  });
+  document.getElementById('card-bg-clear')?.addEventListener('click', () => {
+    document.querySelectorAll('.card-bg-swatch').forEach((b) => {
+      b.style.borderColor = 'transparent';
+      b.style.outline = 'none';
+    });
+    selectedCardBgColor = null;
+    const hiddenInput = document.getElementById('card-bg-value');
+    if (hiddenInput) hiddenInput.value = '';
+  });
+
   // Close on backdrop click or cancel button
   const close = () => { modalRoot.innerHTML = ''; };
   document.getElementById('modal-cancel').addEventListener('click', close);
@@ -940,6 +1108,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     const newCheckable = document.getElementById('card-checkable').checked;
     const newDueDate   = document.getElementById('card-due-date').value || null;
     const newCardColor = document.getElementById('card-color-value')?.value || null;
+    const newCardBgColor = document.getElementById('card-bg-value')?.value || null;
     if (!newTitle) return;
 
     const submitBtn = document.getElementById('modal-submit-btn');
@@ -960,11 +1129,12 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
           title: newTitle, description: newDesc, checkable: newCheckable,
           subtasks: finalSubtasks, dueDate: newDueDate, attachments: finalAttachments,
           cardColor: newCardColor || null,
+          cardBgColor: newCardBgColor || null,
         });
       } else {
         const listEl    = document.querySelector(`.card-list[data-column-id="${columnId}"]`);
         const lastOrder = listEl?.children.length ?? 0;
-        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, newCardColor || null);
+        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, newCardColor || null, newCardBgColor || null);
       }
       close();
     } catch (err) {

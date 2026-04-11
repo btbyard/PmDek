@@ -11,7 +11,7 @@
 
 import { generateBoardWithTasks, generateCard } from './ai.js';
 import { createBoard, setBoardId }              from './board.js';
-import { createCard, setCurrentUser }           from './cards.js';
+import { createCard, setCurrentUser, updateCard } from './cards.js';
 
 const HISTORY_KEY = 'aiChatHistory';
 const MAX_HISTORY = 100;
@@ -159,6 +159,9 @@ function _showEmpty(container) {
       <p class="text-xs text-gray-400 leading-relaxed">
         Ask me to create a PM Deck for your project, or add tasks to the current board.
       </p>
+      <p class="mt-2 text-[11px] text-gray-500 leading-relaxed">
+        Tip: use "to Done" / "to In Progress" for column targeting, or "add sub task X to task Y" for exact sub-task placement.
+      </p>
     </div>`;
 }
 
@@ -221,6 +224,27 @@ function _scrollToBottom() {
 
 // ─── Message handler ──────────────────────────────────────────────────────────
 
+/** Words/phrases that should never trigger AI project generation. */
+const TRIVIAL_PATTERNS = new Set([
+  'hi', 'hello', 'hey', 'yo', 'sup', 'howdy', 'hiya', 'greetings',
+  'ok', 'okay', 'k', 'sure', 'yes', 'no', 'nope', 'yep', 'yeah',
+  'thanks', 'thank you', 'thx', 'ty', 'ty!', 'cheers',
+  'great', 'cool', 'nice', 'good', 'awesome', 'wow', 'sweet',
+  'lol', 'lmao', 'haha', 'hah', 'ha', ':)', ':D', '😊',
+  'bye', 'goodbye', 'cya', 'see you', 'later',
+  'test', 'testing', '...', 'hmm', 'hm', '?', 'help',
+  'what', 'who', 'how', 'why', 'when', 'where',
+]);
+
+function _isTrivialMessage(text) {
+  const cleaned = text.toLowerCase().trim().replace(/[!?.,'"]+$/g, '');
+  if (cleaned.length < 6) return true;
+  if (TRIVIAL_PATTERNS.has(cleaned)) return true;
+  // Single common word with no project context
+  if (/^(hello|hi|hey|thanks?|ok|okay|cool|great|nice|wow|bye|test)[\s!?.,]*$/i.test(text)) return true;
+  return false;
+}
+
 async function _handleSend(e) {
   e.preventDefault();
   if (_submitting) return;
@@ -238,6 +262,11 @@ async function _handleSend(e) {
   _showThinking();
 
   try {
+    if (_isTrivialMessage(text)) {
+      _removeThinking();
+      _addToHistory('assistant', "Hi! I'm your AI project assistant. Try describing a project — for example: \"Build a mobile app for tracking workouts\" — and I'll create a full deck with tasks.");
+      return;
+    }
     if (_mode === 'boards') {
       await _doBoardsMode(text);
     } else {
@@ -270,15 +299,19 @@ async function _doBoardsMode(text) {
   // Set boardId context so createCard can resolve the board
   setBoardId(boardId);
 
-  // All tasks go into the first (TODO) column — none are done yet
-  const todoColumnId = boardColumns[0]?.id;
+  // Place generated tasks into their corresponding generated column.
   let totalTasks = 0;
-  let order = 0;
-  for (const col of columns) {
+  const orderByColumn = new Map();
+  for (let i = 0; i < columns.length; i += 1) {
+    const col = columns[i];
     if (!Array.isArray(col.tasks)) continue;
+    const targetColumnId = boardColumns[i]?.id || boardColumns[0]?.id;
+    if (!targetColumnId) continue;
     for (const t of col.tasks) {
       if (!t.title) continue;
-      await createCard(todoColumnId, t.title, t.description || '', order++, false, t.subtasks || []);
+      const order = orderByColumn.get(targetColumnId) ?? 0;
+      await createCard(targetColumnId, t.title, t.description || '', order, false, t.subtasks || []);
+      orderByColumn.set(targetColumnId, order + 1);
       totalTasks++;
     }
   }
@@ -295,27 +328,186 @@ async function _doBoardsMode(text) {
 }
 
 async function _doBoardMode(text) {
-  const lower = text.toLowerCase();
-
-  // Detect "add subtask to [card]" intent — not supported via chat yet; guide the user
-  if (/sub.?task/.test(lower)) {
+  const directSubtask = _parseDirectSubtaskIntent(text);
+  if (directSubtask) {
     _removeThinking();
-    _addToHistory('assistant', 'To add a subtask, open the card by clicking the edit icon, then use the "+ Add subtask" button inside the card modal.');
+    const targetCard = _findCardByHint(directSubtask.targetHint) || _findTargetCardFromPrompt(text);
+    if (!targetCard) {
+      _addToHistory('assistant', `I could not find the task "${directSubtask.targetHint}". Try quoting the card title, e.g. add sub task "${directSubtask.subtaskTitle}" to task "Fix Bug".`);
+      return;
+    }
+    const existingSubtasks = _readCardSubtasks(targetCard.cardEl);
+    const nextSubtasks = [
+      ...existingSubtasks,
+      {
+        id: `sub-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        title: directSubtask.subtaskTitle,
+        completed: false,
+      },
+    ];
+    await updateCard(targetCard.cardId, { subtasks: nextSubtasks });
+    _addToHistory('assistant', `Added sub-task "${directSubtask.subtaskTitle}" to "${targetCard.cardTitle}".`);
     return;
   }
 
-  // Default: generate a new card via AI and place it in the first column
+  // Generate a new task suggestion, then place it by prompt intent.
   const { title, description } = await generateCard(text);
   _removeThinking();
 
-  const firstList = document.querySelector('.card-list[data-column-id]');
-  const columnId  = firstList?.dataset.columnId;
-  if (!columnId) {
+  const columns = _getVisibleColumns();
+  if (columns.length === 0) {
     _addToHistory('assistant', 'No column found. Please open a board first.');
     return;
   }
 
-  const order = firstList.children.length;
-  await createCard(columnId, title, description, order);
-  _addToHistory('assistant', `Added "${title}" to the first column.`);
+  const targetCard = _findTargetCardFromPrompt(text);
+  if (targetCard) {
+    const existingSubtasks = _readCardSubtasks(targetCard.cardEl);
+    const nextSubtasks = [
+      ...existingSubtasks,
+      {
+        id: `sub-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+        title,
+        completed: false,
+      },
+    ];
+    await updateCard(targetCard.cardId, { subtasks: nextSubtasks });
+    _addToHistory('assistant', `Added "${title}" as a sub-task on "${targetCard.cardTitle}".`);
+    return;
+  }
+
+  const target = _resolveTargetColumn(text, columns);
+  const listEl = document.querySelector(`.card-list[data-column-id="${target.id}"]`);
+  const order = listEl?.children.length ?? 0;
+  await createCard(target.id, title, description, order);
+  _addToHistory('assistant', `Added "${title}" to ${target.label}.`);
+}
+
+function _getVisibleColumns() {
+  return [...document.querySelectorAll('.column')].map((col) => {
+    const titleInput = col.querySelector('.col-title-input');
+    const title = titleInput?.value?.trim()
+      || titleInput?.dataset?.original
+      || col.dataset.columnId
+      || '';
+    return {
+      id: col.dataset.columnId,
+      title,
+      normalizedTitle: _normalize(title),
+    };
+  }).filter((c) => c.id);
+}
+
+function _resolveTargetColumn(text, columns) {
+  const normalized = _normalize(text);
+  const todoDefault = columns[0];
+
+  const keywordToColumn = [
+    { re: /\b(to\s*do|todo|backlog)\b/, aliases: ['todo', 'to do', 'backlog'] },
+    { re: /\b(in\s*progress|in-progress|doing|wip)\b/, aliases: ['in progress', 'doing', 'wip'] },
+    { re: /\b(done|complete|completed|finished)\b/, aliases: ['done', 'complete', 'completed', 'finished'] },
+  ];
+
+  for (const entry of keywordToColumn) {
+    if (!entry.re.test(normalized)) continue;
+    const found = columns.find((c) => entry.aliases.some((a) => c.normalizedTitle.includes(_normalize(a))));
+    if (found) return { id: found.id, label: `"${found.title}"` };
+  }
+
+  const byLength = [...columns].sort((a, b) => b.normalizedTitle.length - a.normalizedTitle.length);
+  for (const col of byLength) {
+    if (!col.normalizedTitle) continue;
+    if (normalized.includes(col.normalizedTitle)) {
+      return { id: col.id, label: `"${col.title}"` };
+    }
+  }
+
+  return { id: todoDefault.id, label: 'the first column (default TODO)' };
+}
+
+function _findTargetCardFromPrompt(text) {
+  const normalized = _normalize(text);
+  if (!/(\bto\b|\bunder\b|\binside\b).*\bcard\b/.test(normalized) && !/\bsub\s?task\b/.test(normalized)) {
+    return null;
+  }
+
+  const cards = [...document.querySelectorAll('.card')].map((cardEl) => {
+    const rawTitle = cardEl.querySelector('.card-title')?.textContent || '';
+    const title = rawTitle.replace(/\s*\d+\/\d+\s*$/, '').trim();
+    return {
+      cardEl,
+      cardId: cardEl.dataset.cardId,
+      cardTitle: title,
+      normalizedTitle: _normalize(title),
+    };
+  }).filter((c) => c.cardId && c.cardTitle);
+  if (cards.length === 0) return null;
+
+  const quoted = text.match(/"([^"]+)"/);
+  if (quoted?.[1]) {
+    const q = _normalize(quoted[1]);
+    const exact = cards.find((c) => c.normalizedTitle === q);
+    if (exact) return exact;
+    const partial = cards.find((c) => c.normalizedTitle.includes(q) || q.includes(c.normalizedTitle));
+    if (partial) return partial;
+  }
+
+  const hint = text.match(/(?:to|under|inside)\s+(?:the\s+)?card\s+([a-z0-9][^,.!?]*)/i);
+  if (hint?.[1]) {
+    const h = _normalize(hint[1]);
+    const match = cards.find((c) => c.normalizedTitle.includes(h) || h.includes(c.normalizedTitle));
+    if (match) return match;
+  }
+
+  const longest = [...cards].sort((a, b) => b.normalizedTitle.length - a.normalizedTitle.length);
+  return longest.find((c) => normalized.includes(c.normalizedTitle)) || null;
+}
+
+function _readCardSubtasks(cardEl) {
+  try {
+    const parsed = JSON.parse(cardEl?.dataset?.subtasks || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function _parseDirectSubtaskIntent(text) {
+  const cleaned = String(text || '').trim();
+  const match = cleaned.match(/(?:add|create)\s+(?:a\s+)?sub\s*-?\s*task\s+(.+?)\s+(?:to|under|inside)\s+(?:the\s+)?(?:task|card)\s+(.+)$/i);
+  if (!match) return null;
+  const subtaskTitle = match[1].trim().replace(/^"|"$/g, '').trim();
+  const targetHint = match[2].trim().replace(/^"|"$/g, '').trim();
+  if (!subtaskTitle || !targetHint) return null;
+  return { subtaskTitle, targetHint };
+}
+
+function _findCardByHint(hint) {
+  const target = _normalize(hint);
+  if (!target) return null;
+
+  const cards = [...document.querySelectorAll('.card')].map((cardEl) => {
+    const rawTitle = cardEl.querySelector('.card-title')?.textContent || '';
+    const cardTitle = rawTitle.replace(/\s*\d+\/\d+\s*$/, '').trim();
+    return {
+      cardEl,
+      cardId: cardEl.dataset.cardId,
+      cardTitle,
+      normalizedTitle: _normalize(cardTitle),
+    };
+  }).filter((c) => c.cardId && c.cardTitle);
+
+  const exact = cards.find((c) => c.normalizedTitle === target);
+  if (exact) return exact;
+
+  const partial = cards.find((c) => c.normalizedTitle.includes(target) || target.includes(c.normalizedTitle));
+  return partial || null;
+}
+
+function _normalize(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
