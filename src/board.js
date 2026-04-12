@@ -29,6 +29,7 @@ import {
 
 import { db } from './firebase.js';
 import { reRenderCards, updateAllCardsBackground } from './cards.js';
+import { canCreateDeck, assertProjectTypeAllowed } from './billing.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -57,6 +58,103 @@ export const DEFAULT_COLUMNS = [
   { id: 'in-progress', title: 'In Progress', order: 1 },
   { id: 'done',        title: 'Done',        order: 2 },
 ];
+
+/** Project type options shown in Create Deck. */
+export const PROJECT_TYPES = [
+  { value: 'standard',       label: 'Standard' },
+  { value: 'weekly',         label: 'Weekly' },
+  { value: 'recurring',      label: 'Recurring' },
+  { value: 'scrum',          label: 'Scrum' },
+  { value: 'waterfall-se',   label: 'Waterfall' },
+  { value: 'agile-se',       label: 'Agile' },
+  { value: 'sdlc',           label: 'SDLC' },
+  { value: 'cybersecurity',  label: 'Cybersecurity' },
+  { value: 'data-analyst',   label: 'Data Analyst' },
+  { value: 'data-engineering', label: 'Data Engineering' },
+];
+
+const PROJECT_TYPE_COLUMNS = {
+  standard: [
+    { id: 'todo',        title: 'Todo',        order: 0 },
+    { id: 'in-progress', title: 'In Progress', order: 1 },
+    { id: 'done',        title: 'Done',        order: 2 },
+  ],
+  weekly: [
+    { id: 'last-week',    title: 'Last Week',    order: 0 },
+    { id: 'current-week', title: 'Current Week', order: 1 },
+    { id: 'next-week',    title: 'Next Week',    order: 2 },
+  ],
+  recurring: [
+    { id: 'upcoming',      title: 'Upcoming',      order: 0 },
+    { id: 'ready-this-week', title: 'Ready This Week', order: 1 },
+    { id: 'in-progress',   title: 'In Progress',   order: 2 },
+    { id: 'blocked',       title: 'Blocked',       order: 3 },
+    { id: 'done-cycle',    title: 'Completed This Cycle', order: 4 },
+  ],
+  'waterfall-se': [
+    { id: 'requirements',  title: 'Requirements',  order: 0 },
+    { id: 'design',        title: 'Design',        order: 1 },
+    { id: 'implementation',title: 'Implementation',order: 2 },
+    { id: 'verification',  title: 'Verification',  order: 3 },
+    { id: 'maintenance',   title: 'Maintenance',   order: 4 },
+  ],
+  'agile-se': [
+    { id: 'backlog',      title: 'Backlog',      order: 0 },
+    { id: 'sprint-ready', title: 'Sprint Ready', order: 1 },
+    { id: 'in-progress',  title: 'In Progress',  order: 2 },
+    { id: 'review',       title: 'Review',       order: 3 },
+    { id: 'done',         title: 'Done',         order: 4 },
+  ],
+  sdlc: [
+    { id: 'planning',    title: 'Planning',    order: 0 },
+    { id: 'analysis',    title: 'Analysis',    order: 1 },
+    { id: 'design',      title: 'Design',      order: 2 },
+    { id: 'development', title: 'Development', order: 3 },
+    { id: 'testing',     title: 'Testing',     order: 4 },
+    { id: 'deployment',  title: 'Deployment',  order: 5 },
+    { id: 'maintenance', title: 'Maintenance', order: 6 },
+  ],
+  scrum: [
+    { id: 'product-backlog', title: 'Product Backlog', order: 0 },
+    { id: 'sprint-backlog',  title: 'Sprint Backlog',  order: 1 },
+    { id: 'in-progress',     title: 'In Progress',     order: 2 },
+    { id: 'in-review',       title: 'In Review',       order: 3 },
+    { id: 'done',            title: 'Done',            order: 4 },
+  ],
+  cybersecurity: [
+    { id: 'monitoring',   title: 'Monitoring',         order: 0 },
+    { id: 'detected',     title: 'Threat Detected',    order: 1 },
+    { id: 'investigating',title: 'Investigating',       order: 2 },
+    { id: 'containing',   title: 'Containing',         order: 3 },
+    { id: 'resolved',     title: 'Resolved',           order: 4 },
+  ],
+  'data-analyst': [
+    { id: 'questions',       title: 'Business Questions', order: 0 },
+    { id: 'data-prep',       title: 'Data Prep',          order: 1 },
+    { id: 'analysis',        title: 'Analysis',           order: 2 },
+    { id: 'insights-review', title: 'Insights Review',    order: 3 },
+    { id: 'reporting',       title: 'Reporting',          order: 4 },
+  ],
+  'data-engineering': [
+    { id: 'intake',        title: 'Source Intake',     order: 0 },
+    { id: 'pipeline-dev',  title: 'Pipeline Dev',      order: 1 },
+    { id: 'quality-check', title: 'Quality Checks',    order: 2 },
+    { id: 'orchestration', title: 'Orchestration',     order: 3 },
+    { id: 'published',     title: 'Published',         order: 4 },
+  ],
+};
+
+/**
+ * Returns a deep-ish copy of default columns for a project type.
+ * Falls back to Standard for unknown values.
+ *
+ * @param {string} projectType
+ * @returns {Array<{id: string, title: string, order: number}>}
+ */
+export function getDefaultColumnsForProjectType(projectType = 'standard') {
+  const cols = PROJECT_TYPE_COLUMNS[projectType] || PROJECT_TYPE_COLUMNS.standard;
+  return cols.map((c) => ({ ...c }));
+}
 
 // Module-level cache — set once after board is loaded, read by cards.js.
 let _boardId = null;
@@ -91,15 +189,29 @@ export function setBoardId(id) {
  *
  * @param {import('firebase/auth').User} user
  * @param {string} [title='My Board']
+ * @param {Array<{id: string, title: string, order: number}>} [columns=DEFAULT_COLUMNS]
+ * @param {string|null} [dueDate=null]
+ * @param {string|null} [color=null]
+ * @param {string} [projectType='standard']
  * @returns {Promise<string>} boardId
  */
-export async function createBoard(user, title = 'My Board', columns = DEFAULT_COLUMNS, dueDate = null, color = null) {
+export async function createBoard(user, title = 'My Board', columns = DEFAULT_COLUMNS, dueDate = null, color = null, projectType = 'standard', { visibility = 'private', orgId = null, assignedMembers = [] } = {}) {
+  const deckGate = await canCreateDeck(user.uid);
+  if (!deckGate.allowed) {
+    throw new Error(`Deck limit reached for ${deckGate.plan.label} (${deckGate.limit}).`);
+  }
+  await assertProjectTypeAllowed(user.uid, projectType || 'standard');
+
   const ref = await addDoc(collection(db, 'boards'), {
     userId:    user.uid,
     title:     title.trim() || 'My Board',
     columns:   columns,
     dueDate:   dueDate || null,
     color:     color || null,
+    projectType: projectType || 'standard',
+    visibility:      visibility || 'private',
+    orgId:           orgId || null,
+    assignedMembers: Array.isArray(assignedMembers) ? assignedMembers : [],
     createdAt: serverTimestamp(),
   });
   return ref.id;
@@ -145,10 +257,14 @@ export async function getCardStatsByUserId(userId) {
  * Renames a board document.
  * @param {string} boardId
  * @param {string} newTitle
+ * @param {string|null} [dueDate=null]
  * @returns {Promise<void>}
  */
-export async function renameBoard(boardId, newTitle) {
-  await updateDoc(doc(db, 'boards', boardId), { title: newTitle.trim() || 'My Board' });
+export async function renameBoard(boardId, newTitle, dueDate = null) {
+  await updateDoc(doc(db, 'boards', boardId), {
+    title: newTitle.trim() || 'My Board',
+    dueDate: dueDate || null,
+  });
 }
 
 /**
@@ -575,20 +691,18 @@ function buildColumnEl(col, boardId, allColumns) {
   el.addEventListener('mouseenter', () => delBtn.classList.remove('opacity-0'));
   el.addEventListener('mouseleave', () => delBtn.classList.add('opacity-0'));
   delBtn.addEventListener('mousedown', (e) => e.stopPropagation());
-  delBtn.addEventListener('click', async () => {
+  delBtn.addEventListener('click', () => {
     const cardCount = el.querySelectorAll('.card').length;
-    const msg = cardCount > 0
-      ? `Delete "${col.title}" and its ${cardCount} task${cardCount !== 1 ? 's' : ''}?`
-      : `Delete "${col.title}"?`;
-    if (!confirm(msg)) return;
-    const next = allColumns.filter((c) => c.id !== col.id);
-    try {
-      await saveColumns(boardId, next);
-      renderBoard({ id: boardId, title: document.getElementById('board-title-display')?.textContent?.trim() || '', columns: next });
-      reRenderCards();
-    } catch (err) {
-      console.error('Delete column failed:', err);
-    }
+    _openDeleteColumnModal(col, cardCount, async () => {
+      const next = allColumns.filter((c) => c.id !== col.id);
+      try {
+        await saveColumns(boardId, next);
+        renderBoard({ id: boardId, title: document.getElementById('board-title-display')?.textContent?.trim() || '', columns: next });
+        reRenderCards();
+      } catch (err) {
+        console.error('Delete column failed:', err);
+      }
+    });
   });
 
   _initColumnResize(el, col.id);
@@ -609,6 +723,53 @@ export function updateColumnCount(columnId, count) {
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
+
+/**
+ * Shows a styled confirmation modal before deleting a column.
+ * @param {{ id: string, title: string }} col
+ * @param {number} cardCount
+ * @param {() => Promise<void>} onConfirm
+ */
+function _openDeleteColumnModal(col, cardCount, onConfirm) {
+  const modalRoot = document.getElementById('modal-root');
+  if (!modalRoot) return;
+
+  const label = cardCount > 0
+    ? `"${col.title}" and all <strong>${cardCount} task${cardCount !== 1 ? 's' : ''}</strong> will be permanently removed.`
+    : `"${col.title}" will be permanently removed.`;
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <div class="flex items-start gap-3 mb-5">
+          <div class="flex-shrink-0 w-9 h-9 rounded-full bg-red-100 flex items-center justify-center">
+            <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-gray-900">Delete column?</h3>
+            <p class="mt-1 text-sm text-gray-500">${label} This cannot be undone.</p>
+          </div>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button id="del-col-cancel" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">Cancel</button>
+          <button id="del-col-confirm" class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors">Delete</button>
+        </div>
+      </div>
+    </div>`;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('del-col-cancel').addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+  document.getElementById('del-col-confirm').addEventListener('click', async () => {
+    close();
+    await onConfirm();
+  });
+}
 
 /**
  * Minimal XSS guard for values rendered as innerHTML.

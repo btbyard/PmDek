@@ -7,9 +7,12 @@
  * in the top-right that opens a rename modal. Clicking the card body opens the board.
  */
 
-import { getUserBoards, getCardStatsByUserId, createBoard, renameBoard, updateBoardColor, deleteBoard, archiveBoard, unarchiveBoard, DEFAULT_COLUMNS, setBoardId, DECK_COLORS } from './board.js';
+import { getUserBoards, getCardStatsByUserId, createBoard, renameBoard, updateBoardColor, deleteBoard, archiveBoard, unarchiveBoard, DEFAULT_COLUMNS, setBoardId, DECK_COLORS, PROJECT_TYPES, getDefaultColumnsForProjectType } from './board.js';
 import { generateBoard, generateBoardWithTasks }            from './ai.js';
-import { createCard, updateAllCardsBackground }             from './cards.js';
+import { createCard, updateAllCardsBackground, setCurrentUser } from './cards.js';
+import { getUserProfile }                                   from './users.js';
+import { getOrgMembers }                                    from './org.js';
+import { getUserPlan }                                       from './billing.js';
 
 // Store the refresh callback so the rename modal can refresh the grid after saving.
 let _onBoardOpen = null;
@@ -68,10 +71,21 @@ export async function renderBoardsHome(user, onBoardOpen) {
   }
 }
 
-export function openCreateBoardModal(user, onCreated) {
+export async function openCreateBoardModal(user, onCreated) {
   const modalRoot = document.getElementById('modal-root');
 
   const DEFAULT_COLOR = '#111827';
+
+  // Load org context to determine if visibility selector should appear
+  let orgMembers = [];
+  let userOrgId  = null;
+  try {
+    const profile = await getUserProfile(user.uid);
+    if (profile?.organizationId) {
+      userOrgId  = profile.organizationId;
+      orgMembers = await getOrgMembers(profile.organizationId);
+    }
+  } catch (_) { /* non-blocking — org features simply won't appear */ }
 
   const swatchesHtml = [
     { value: DEFAULT_COLOR, label: 'Default' },
@@ -83,6 +97,13 @@ export function openCreateBoardModal(user, onCreated) {
       style="background:${c.value};border-color:${isDefault ? '#111827' : 'transparent'}${isDefault ? ';outline:2px solid #11182760;outline-offset:2px' : ''}" title="${c.label}"></button>`;
   }).join('');
   const defaultColorVal = DEFAULT_COLOR;
+  const plan = await getUserPlan(user.uid);
+  const allowedTypes = plan.allowedProjectTypes === 'all'
+    ? PROJECT_TYPES
+    : PROJECT_TYPES.filter((opt) => plan.allowedProjectTypes.includes(opt.value));
+  const projectTypeOptionsHtml = allowedTypes.map((opt) => `
+    <option value="${opt.value}" ${opt.value === 'standard' ? 'selected' : ''}>${opt.label}</option>
+  `).join('');
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -92,6 +113,41 @@ export function openCreateBoardModal(user, onCreated) {
           <input id="board-title-input" type="text" placeholder="Deck Name"
             required maxlength="60"
             class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="board-project-type-input">
+              Project Type
+            </label>
+            <select id="board-project-type-input"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+              ${projectTypeOptionsHtml}
+            </select>
+          </div>
+          ${userOrgId ? `
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="board-visibility-input">
+              Visibility
+            </label>
+            <select id="board-visibility-input"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+              <option value="private">Myself</option>
+              <option value="org">My Organization</option>
+            </select>
+          </div>
+          <div id="board-member-assign-wrap" class="hidden">
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+              Assign Organization Members
+            </label>
+            <div class="max-h-28 overflow-y-auto rounded-lg border border-gray-200 p-2 space-y-1">
+              ${orgMembers.map((m) => `
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" class="board-member-check rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+                    value="${m.uid}" />
+                  <span class="text-xs text-gray-700">${m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`}</span>
+                </label>
+              `).join('')}
+            </div>
+          </div>
+          ` : ''}
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">
               Project Due Date <span class="text-gray-400 font-normal">(optional)</span>
@@ -146,6 +202,17 @@ export function openCreateBoardModal(user, onCreated) {
   modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) close();
   });
+
+  const visibilitySelect = document.getElementById('board-visibility-input');
+  const memberWrap = document.getElementById('board-member-assign-wrap');
+  if (visibilitySelect && memberWrap) {
+    const syncMemberVisibility = () => {
+      memberWrap.classList.toggle('hidden', visibilitySelect.value !== 'org');
+    };
+    visibilitySelect.addEventListener('change', syncMemberVisibility);
+    syncMemberVisibility();
+  }
+
   _bindModalSubmitKeys(form);
 
   let _submitting = false;
@@ -157,23 +224,40 @@ export function openCreateBoardModal(user, onCreated) {
     if (submitBtn) submitBtn.disabled = true;
 
     const title   = input.value.trim() || 'My Deck';
+    const projectType = document.getElementById('board-project-type-input')?.value || 'standard';
+    const defaultCols = getDefaultColumnsForProjectType(projectType);
     const dueDate = document.getElementById('board-due-date-input')?.value || null;
     const color   = document.getElementById('board-color-value')?.value || null;
+    const visibility = document.getElementById('board-visibility-input')?.value || 'private';
+    const assignedMembers = visibility === 'org'
+      ? [...document.querySelectorAll('.board-member-check:checked')].map((el) => el.value)
+      : [];
     try {
       const boardId = await _withTimeout(
-        createBoard(user, title, DEFAULT_COLUMNS, dueDate || null, color || null),
+        createBoard(user, title, defaultCols, dueDate || null, color || null, projectType, {
+          visibility,
+          orgId: visibility === 'org' ? (userOrgId || null) : null,
+          assignedMembers,
+        }),
         BOARD_WRITE_TIMEOUT_MS,
         'Creating the board took too long.',
       );
       const board = {
         id: boardId,
         title,
-        columns: DEFAULT_COLUMNS.map((col) => ({ ...col })),
+        columns: defaultCols.map((col) => ({ ...col })),
+        projectType,
         dueDate: dueDate || null,
         color:   color || null,
+        visibility,
+        orgId: visibility === 'org' ? (userOrgId || null) : null,
+        assignedMembers,
       };
       _upsertCachedBoard(board);
       _persistCurrentBoards();
+      if (projectType === 'weekly') {
+        try { await _seedWeeklyBoard(boardId, user); } catch (err) { console.warn('Weekly board seeding failed:', err); }
+      }
       close();
       onCreated(boardId, board);
     } catch (err) {
@@ -292,6 +376,26 @@ export function openAiBoardModal(user, onCreated) {
       submitBtn.disabled = false;
     }
   });
+}
+
+// ─── Weekly board seeding ─────────────────────────────────────────────────────
+
+/**
+ * Seeds a newly-created Weekly board with 5 Day cards in the "Current Week"
+ * column. Each card gets 3 starter subtasks (Task 1 / 2 / 3).
+ */
+async function _seedWeeklyBoard(boardId, user) {
+  setBoardId(boardId);
+  setCurrentUser(user);
+  for (let day = 1; day <= 5; day++) {
+    const subtasks = [1, 2, 3].map((n) => ({
+      id: `sub-${Date.now()}-d${day}-t${n}-${Math.random().toString(36).slice(2, 6)}`,
+      title: `Task ${n}`,
+      completed: false,
+    }));
+    // eslint-disable-next-line no-await-in-loop
+    await createCard('current-week', `Day ${day}`, '', day - 1, true, subtasks);
+  }
 }
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
@@ -546,6 +650,7 @@ function _buildCard(board, index = 0, instant = false, stats = null) {
   ].join(' ');
   card.dataset.boardId = board.id;
   card.setAttribute('aria-label', `Open board: ${board.title}`);
+  const projectTypeLabel = _getProjectTypeLabel(board.projectType);
 
   card.innerHTML = `
     <!-- PM corner mark — top-left (playing card style) -->
@@ -555,6 +660,9 @@ function _buildCard(board, index = 0, instant = false, stats = null) {
     <!-- DEK corner mark — bottom-right, rotated 180° like a playing card -->
     <div class="board-tile-corner-bottom z-10 flex flex-col items-center gap-px" aria-hidden="true">
       <span class="board-tile-mark" style="color:rgba(255,255,255,0.85)">DEK</span><span style="font-size:0.6rem;color:rgba(255,255,255,0.7);line-height:1;margin-left:2px">&#9824;</span>
+    </div>
+    <div class="absolute top-2 right-10 z-20 max-w-[7.5rem] truncate rounded-full border border-white/20 bg-black/30 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white/90 backdrop-blur-sm" title="${escapeHtml(projectTypeLabel)}">
+      ${escapeHtml(projectTypeLabel)}
     </div>
     <!-- Top suit band -->
     <div class="board-tile-band h-16 w-full flex-shrink-0 relative overflow-hidden"
@@ -626,7 +734,7 @@ function _buildCard(board, index = 0, instant = false, stats = null) {
 // ─── Settings dropdown ───────────────────────────────────────────────────────
 
 /**
- * Shows a tiny positioned dropdown below the gear button with Rename / Delete.
+ * Shows a tiny positioned dropdown below the gear button with Edit / Delete.
  */
 function _openBoardSettingsMenu(e, board) {
   // Remove any existing open menus
@@ -673,7 +781,7 @@ function _openBoardSettingsMenu(e, board) {
           d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5
              m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
       </svg>
-      Rename
+      Edit
     </button>
     <button data-action="color"
       class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2">
@@ -697,7 +805,7 @@ function _openBoardSettingsMenu(e, board) {
           d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6
              m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
       </svg>
-      Delete board
+      Delete Deck
     </button>`;
 
   document.body.appendChild(menu);
@@ -751,12 +859,23 @@ function _openRenameBoardModal(board) {
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
-        <h3 class="text-lg font-semibold text-gray-800 mb-4">Rename board</h3>
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Edit Deck</h3>
         <form id="rename-board-form" class="flex flex-col gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="rename-board-input">Deck Name</label>
           <input id="rename-board-input" type="text"
             value="${escapeHtml(board.title)}"
             required maxlength="100"
             class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="rename-board-due-date-input">
+              Project Due Date <span class="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <input id="rename-board-due-date-input" type="date"
+              value="${board.dueDate || ''}"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          </div>
           <div class="flex justify-end gap-2">
             <button type="button" id="rename-board-cancel"
               class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
@@ -787,10 +906,11 @@ function _openRenameBoardModal(board) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const newTitle = input.value.trim();
+    const newDueDate = document.getElementById('rename-board-due-date-input')?.value || null;
     if (!newTitle) return;
     try {
-      await renameBoard(board.id, newTitle);
-      _upsertCachedBoard({ ...board, title: newTitle });
+      await renameBoard(board.id, newTitle, newDueDate);
+      _upsertCachedBoard({ ...board, title: newTitle, dueDate: newDueDate });
       _persistCurrentBoards();
       close();
       await renderBoardsHome(_currentUser, _onBoardOpen);
@@ -987,6 +1107,10 @@ function _formatDeckDate(dateStr) {
   } catch { return dateStr; }
 }
 
+function _getProjectTypeLabel(projectType) {
+  return PROJECT_TYPES.find((type) => type.value === projectType)?.label || 'Standard';
+}
+
 function _upsertCachedBoard(board) {
   const index = _lastBoards.findIndex((item) => item.id === board.id);
   if (index === -1) {
@@ -1012,6 +1136,7 @@ function _persistBoards(userId, boards) {
       id:       board.id,
       title:    board.title,
       columns:  Array.isArray(board.columns) ? board.columns : [],
+      projectType: board.projectType || 'standard',
       archived: board.archived || false,
       dueDate:  board.dueDate || null,
       color:    board.color || null,

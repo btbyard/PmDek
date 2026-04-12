@@ -153,14 +153,14 @@
   <!-- ── 2. Boards home view ──────────────────────────────────────────────── -->
   <div id="boards-view" class="hidden flex-col h-full">
 
-    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
-      <div class="flex items-center gap-2">
+    <header id="boards-header" class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+      <div id="boards-header-left" class="flex items-center gap-2">
         <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-9 w-auto" />
         <span class="text-xl font-bold tracking-tight">
           <span class="text-brand-500">PM</span><span class="text-gray-800">Dek</span>
         </span>
       </div>
-      <div class="flex items-center gap-3">
+      <div id="boards-header-right" class="flex items-center gap-3">
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
         <button id="account-menu-btn-boards" aria-label="Account menu"
@@ -225,9 +225,9 @@
   <!-- ── 3. Board (Kanban) view ────────────────────────────────────────────── -->
   <div id="board-view" class="hidden flex-col h-full">
 
-    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+    <header id="board-header" class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
 
-      <div class="flex items-center gap-4">
+      <div id="board-header-left" class="flex items-center gap-4">
         <div class="flex items-center gap-2">
           <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-8 w-auto" />
           <span class="text-lg font-bold tracking-tight">
@@ -243,12 +243,17 @@
         </button>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div id="board-header-center" class="flex items-center gap-2">
         <button id="deck-prev-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Previous deck" aria-label="Previous deck">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
         </button>
         <div class="flex flex-col items-center">
-          <span id="board-title-display" class="text-xl font-bold tracking-tight text-gray-900 truncate max-w-sm"></span>
+          <button id="board-title-picker-btn" class="group inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md hover:bg-gray-100 transition-colors" title="Select deck">
+            <span id="board-title-display" class="text-xl font-bold tracking-tight text-gray-900 truncate max-w-sm"></span>
+            <svg class="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
           <span id="board-due-date-display" class="hidden text-xs text-gray-400 mt-0.5"></span>
         </div>
         <button id="deck-next-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Next deck" aria-label="Next deck">
@@ -256,17 +261,20 @@
         </button>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div id="board-header-views" class="flex items-center gap-2">
+        <button id="board-kanban-view-btn" class="px-2.5 py-1 text-xs font-medium border border-gray-300 bg-gray-900 text-white rounded-md">Kanban</button>
+        <button id="board-list-view-btn" class="px-2.5 py-1 text-xs font-medium border border-gray-200 text-gray-600 rounded-md hover:bg-gray-50">List View</button>
+        <button id="board-calendar-view-btn" class="px-2.5 py-1 text-xs font-medium border border-gray-200 text-gray-600 rounded-md hover:bg-gray-50">Calendar View</button>
         <button id="project-timeline-btn"
           class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500
                  hover:text-gray-800 border border-gray-200 hover:border-gray-300
                  bg-white hover:bg-gray-50 rounded-lg transition-colors"
-          title="Project Timeline">
+          title="Project Timeline/Gantt">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
           </svg>
-          Timeline
+          Timeline/Gantt
         </button>
         <button id="reset-col-widths-btn"
           class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500
@@ -279,19 +287,9 @@
           </svg>
           Reset card widths
         </button>
-        <button id="ai-trigger-btn"
-          class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-amber-900
-                 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
-          <span class="text-base leading-none">✨</span>
-          Use AI to help
-        </button>
-        <button id="ai-board-help-btn-board" aria-label="AI help examples"
-          class="w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold
-                 text-amber-700 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors">?
-        </button>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div id="board-header-right" class="flex items-center gap-3">
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
         <button id="account-menu-btn-board" aria-label="Account menu"
@@ -306,9 +304,108 @@
     </header>
 
     <main class="flex-1 overflow-auto p-6">
+      <!-- Search / filter bar -->
+      <div id="board-search-bar" class="mb-4 flex items-center gap-3 flex-wrap">
+        <div class="relative">
+          <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0"/>
+          </svg>
+          <input id="board-search-input" type="search" placeholder="Search cards…"
+            class="pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-brand-500 focus:border-brand-500 bg-white w-48">
+        </div>
+        <!-- Filter: overdue -->
+        <button id="filter-overdue-btn" title="Show overdue cards only"
+          class="filter-chip flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-500 hover:border-red-300 hover:text-red-600 transition-colors">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0"/>
+          </svg>
+          Overdue
+        </button>
+        <!-- Filter: due today -->
+        <button id="filter-today-btn" title="Show cards due today"
+          class="filter-chip flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-500 hover:border-amber-300 hover:text-amber-600 transition-colors">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+          Due Today
+        </button>
+        <!-- Filter: recurring -->
+        <button id="filter-recurring-btn" title="Show recurring cards only"
+          class="filter-chip flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-500 hover:border-emerald-300 hover:text-emerald-600 transition-colors">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M20 10a8 8 0 00-14.9-4M4 14a8 8 0 0014.9 4"/>
+          </svg>
+          Recurring
+        </button>
+        <!-- Clear filters -->
+        <button id="filter-clear-btn" title="Clear all filters" class="hidden text-xs text-gray-400 hover:text-gray-700 transition-colors px-1">✕ Clear</button>
+        <!-- Card count summary -->
+        <span id="board-filter-count" class="hidden text-xs text-gray-400"></span>
+
+        <div class="ml-auto flex items-center gap-2">
+          <button id="ai-trigger-btn"
+            class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-amber-900
+                   bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
+            <span class="text-base leading-none">✨</span>
+            Use AI to help
+          </button>
+          <button id="ai-board-help-btn-board" aria-label="AI help examples"
+            class="w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold
+                   text-amber-700 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors">?
+          </button>
+          <button id="ai-dashboard-btn"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sky-900 bg-sky-100 hover:bg-sky-200 border border-sky-300 rounded-lg transition-colors">
+            AI Dashboard
+          </button>
+        </div>
+      </div>
       <div id="board-root"></div>
+      <div id="board-list-view" class="hidden"></div>
+      <div id="board-calendar-view" class="hidden"></div>
+      <div id="board-timeline-view" class="hidden"></div>
     </main>
 
+  </div>
+
+  <!-- ── 4. AI Dashboard view ─────────────────────────────────────────────── -->
+  <div id="ai-dashboard-view" class="hidden flex-col h-full">
+    <header id="ai-dashboard-header" class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+      <div id="ai-dashboard-header-left" class="flex items-center gap-3">
+        <button id="back-to-board-from-ai-dashboard"
+          class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Back to Deck
+        </button>
+        <h2 class="text-lg font-semibold text-gray-800">AI Dashboard</h2>
+      </div>
+
+      <div id="ai-dashboard-header-center" class="flex items-center gap-2">
+        <button id="ai-dashboard-deck-prev-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Previous deck" aria-label="Previous deck">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </button>
+        <button id="ai-dashboard-title-picker-btn" class="group inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md hover:bg-gray-100 transition-colors" title="Select deck">
+          <span id="ai-dashboard-title-display" class="text-sm font-semibold text-gray-800 truncate max-w-[16rem]"></span>
+          <svg class="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <button id="ai-dashboard-deck-next-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Next deck" aria-label="Next deck">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+
+      <div id="ai-dashboard-header-right" class="flex items-center gap-2">
+        <button id="refresh-ai-dashboard-btn"
+          class="px-3 py-1.5 text-xs font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
+          Refresh
+        </button>
+      </div>
+    </header>
+    <main class="flex-1 overflow-auto p-6 bg-[#f7f8fc]">
+      <div id="ai-dashboard-root" class="max-w-6xl mx-auto"></div>
+    </main>
   </div>
 
   <!-- AI Chat Sidebar -->
@@ -322,15 +419,25 @@
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-amber-50 flex-shrink-0">
       <div class="flex items-center gap-2">
         <span class="text-lg leading-none select-none">✨</span>
-        <h2 class="text-sm font-semibold text-amber-900">AI Assistant</h2>
+        <h2 id="ai-chat-title" class="text-sm font-semibold text-amber-900">AI Assistant</h2>
       </div>
-      <button id="ai-chat-close-btn"
-              class="p-1.5 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded-lg transition-colors"
-              aria-label="Close AI chat">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
-      </button>
+      <span id="ai-chat-usage" class="text-[11px] text-amber-800/80 mr-2"></span>
+      <div class="flex items-center gap-1">
+        <button id="ai-chat-expand-btn"
+                class="p-1.5 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded-lg transition-colors"
+                aria-label="Collapse AI chat" title="Collapse AI chat">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <button id="ai-chat-close-btn"
+                class="p-1.5 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded-lg transition-colors"
+                aria-label="Close AI chat">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Messages -->

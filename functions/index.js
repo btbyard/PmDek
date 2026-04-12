@@ -11,9 +11,26 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { defineSecret }       = require('firebase-functions/params');
 const { GoogleGenAI }        = require('@google/genai');
+const admin                  = require('firebase-admin');
+const Stripe                 = require('stripe');
 
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
+const STRIPE_PRICE_MID = defineSecret('STRIPE_PRICE_MID');
+const STRIPE_PRICE_PRO = defineSecret('STRIPE_PRICE_PRO');
+const STRIPE_PRICE_BUSINESS_SMALL = defineSecret('STRIPE_PRICE_BUSINESS_SMALL');
+const STRIPE_PRICE_BUSINESS_GROWTH = defineSecret('STRIPE_PRICE_BUSINESS_GROWTH');
 const _BUILD = 4; // bump to force redeploy
+
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
+function _getStripe() {
+  const key = STRIPE_SECRET_KEY.value();
+  if (!key) throw new HttpsError('failed-precondition', 'Stripe is not configured (missing STRIPE_SECRET_KEY).');
+  return new Stripe(key, { apiVersion: '2025-02-24.acacia' });
+}
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -266,5 +283,60 @@ Rules for tasks (place ALL in the first column):
   return {
     title: parsed.title.trim().slice(0, 60),
     columns,
+  };
+});
+
+// ─── createStripeCheckoutSession ─────────────────────────────────────────────
+
+exports.createStripeCheckoutSession = onCall({
+  maxInstances: 10,
+  invoker: 'public',
+  secrets: [
+    STRIPE_SECRET_KEY,
+    STRIPE_PRICE_MID,
+    STRIPE_PRICE_PRO,
+    STRIPE_PRICE_BUSINESS_SMALL,
+    STRIPE_PRICE_BUSINESS_GROWTH,
+  ],
+}, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'You must be signed in to start checkout.');
+  }
+
+  const { planKey, successUrl, cancelUrl } = request.data || {};
+  if (typeof planKey !== 'string' || !planKey.trim()) {
+    throw new HttpsError('invalid-argument', 'planKey is required.');
+  }
+
+  const priceIdMap = {
+    mid: STRIPE_PRICE_MID.value(),
+    pro: STRIPE_PRICE_PRO.value(),
+    'business-small': STRIPE_PRICE_BUSINESS_SMALL.value(),
+    'business-growth': STRIPE_PRICE_BUSINESS_GROWTH.value(),
+  };
+  const priceId = priceIdMap[planKey];
+  if (!priceId) {
+    throw new HttpsError('failed-precondition', `No Stripe price configured for plan: ${planKey}`);
+  }
+
+  const stripe = _getStripe();
+  const userDoc = await admin.firestore().collection('users').doc(request.auth.uid).get();
+  const email = userDoc.exists ? (userDoc.data().email || request.auth.token.email || undefined) : (request.auth.token.email || undefined);
+
+  const session = await stripe.checkout.sessions.create({
+    mode: 'subscription',
+    line_items: [{ price: priceId, quantity: 1 }],
+    success_url: typeof successUrl === 'string' && successUrl ? successUrl : 'https://example.com',
+    cancel_url: typeof cancelUrl === 'string' && cancelUrl ? cancelUrl : 'https://example.com',
+    customer_email: email,
+    metadata: {
+      uid: request.auth.uid,
+      planKey,
+    },
+  });
+
+  return {
+    url: session.url,
+    id: session.id,
   };
 });

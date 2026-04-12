@@ -31,24 +31,6 @@ import {
 import { db }                 from './firebase.js';
 import { storage }            from './firebase.js';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
-
-const CARD_COLORS = [
-  { value: '#6366f1', label: 'Indigo' },
-  { value: '#8b5cf6', label: 'Purple' },
-  { value: '#ec4899', label: 'Pink' },
-  { value: '#ef4444', label: 'Red' },
-  { value: '#fdba74', label: 'Peach' },
-  { value: '#f97316', label: 'Orange' },
-  { value: '#22c55e', label: 'Green' },
-  { value: '#14b8a6', label: 'Teal' },
-  { value: '#7dd3fc', label: 'Sky' },
-  { value: '#93c5fd', label: 'Light Blue' },
-  { value: '#3b82f6', label: 'Blue' },
-  { value: '#cbd5e1', label: 'Light Gray' },
-  { value: '#9ca3af', label: 'Gray' },
-  { value: '#f59e0b', label: 'Amber' },
-  { value: '#64748b', label: 'Slate' },
-];
 import { getBoardId }         from './board.js';
 import { updateColumnCount }  from './board.js';
 import { initDragAndDrop }    from './drag.js';
@@ -60,6 +42,11 @@ let _unsubscribeCards = null;
 
 /** Last known snapshot of cards — used to re-render after a column change. */
 let _lastCards = [];
+
+/** Active search/filter query (lowercase). Empty string = no filter. */
+let _filterQuery = '';
+/** Active chip filters: set of 'overdue' | 'today' | 'recurring' */
+let _filterChips = new Set();
 
 /**
  * Starts a real-time listener on the cards collection for the active board.
@@ -100,6 +87,140 @@ export function reRenderCards() {
   renderAllCards(_lastCards);
 }
 
+/**
+ * Filters visible cards by a search query (title + description).
+ * Passing an empty string clears the filter.
+ * @param {string} query
+ */
+export function filterCards(query) {
+  _filterQuery = (query || '').toLowerCase().trim();
+  renderAllCards(_lastCards);
+}
+
+export function getCardsSnapshot() {
+  return [..._lastCards];
+}
+
+function _applyActiveFilters(cards) {
+  const q = _filterQuery;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let visible = q
+    ? cards.filter((c) =>
+      String(c.title || '').toLowerCase().includes(q)
+      || String(c.description || '').toLowerCase().includes(q)
+    )
+    : [...cards];
+
+  if (_filterChips.has('recurring')) {
+    visible = visible.filter((c) => Boolean(c.recurring));
+  }
+  if (_filterChips.has('overdue')) {
+    visible = visible.filter((c) => {
+      if (!c.dueDate || c.completed) return false;
+      return new Date(c.dueDate + 'T00:00:00') < today;
+    });
+  }
+  if (_filterChips.has('today')) {
+    visible = visible.filter((c) => {
+      if (!c.dueDate || c.completed) return false;
+      return new Date(c.dueDate + 'T00:00:00').getTime() === today.getTime();
+    });
+  }
+
+  return visible;
+}
+
+export function renderListView() {
+  const listRoot = document.getElementById('board-list-view');
+  if (!listRoot) return;
+
+  const cards = _applyActiveFilters(_lastCards);
+  if (cards.length === 0) {
+    listRoot.innerHTML = '<div class="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-500">No tasks yet.</div>';
+    return;
+  }
+
+  const sortByDueDate = (a, b) => String(a.dueDate || '9999-12-31').localeCompare(String(b.dueDate || '9999-12-31'));
+  const openCards = cards.filter((c) => !c.completed).sort(sortByDueDate);
+  const doneCards = cards.filter((c) => c.completed).sort(sortByDueDate);
+
+  listRoot.innerHTML = `
+    <div class="rounded-xl border border-gray-200 overflow-hidden bg-white">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-gray-600">
+          <tr>
+            <th class="text-left px-3 py-2">Task</th>
+            <th class="text-left px-3 py-2">Column</th>
+            <th class="text-left px-3 py-2">Due</th>
+            <th class="text-left px-3 py-2">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${openCards.map((c) => `
+            <tr class="border-t border-gray-100">
+              <td class="px-3 py-2 text-gray-800">${escapeHtml(c.title || '')}</td>
+              <td class="px-3 py-2 text-gray-500">${escapeHtml(c.columnId || '')}</td>
+              <td class="px-3 py-2 text-gray-500">${escapeHtml(c.dueDate || 'No due date')}</td>
+              <td class="px-3 py-2">${c.completed ? '<span class="text-emerald-600">Done</span>' : '<span class="text-amber-600">Open</span>'}</td>
+            </tr>
+          `).join('')}
+          ${doneCards.length ? `
+            <tr class="border-t border-gray-200 bg-gray-50/70">
+              <td class="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500" colspan="4">Completed</td>
+            </tr>
+          ` : ''}
+          ${doneCards.map((c) => `
+            <tr class="border-t border-gray-100 bg-gray-50/40">
+              <td class="px-3 py-2 text-gray-500 line-through">${escapeHtml(c.title || '')}</td>
+              <td class="px-3 py-2 text-gray-400">${escapeHtml(c.columnId || '')}</td>
+              <td class="px-3 py-2 text-gray-400">${escapeHtml(c.dueDate || 'No due date')}</td>
+              <td class="px-3 py-2"><span class="text-emerald-600">Done</span></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+export function renderCalendarView() {
+  const calRoot = document.getElementById('board-calendar-view');
+  if (!calRoot) return;
+
+  const byDate = new Map();
+  _applyActiveFilters(_lastCards).forEach((c) => {
+    if (!c.dueDate) return;
+    if (!byDate.has(c.dueDate)) byDate.set(c.dueDate, []);
+    byDate.get(c.dueDate).push(c);
+  });
+
+  const dates = [...byDate.keys()].sort();
+  if (dates.length === 0) {
+    calRoot.innerHTML = '<div class="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-500">No dated tasks to plot on the calendar.</div>';
+    return;
+  }
+
+  calRoot.innerHTML = `
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+      ${dates.map((d) => `
+        <div class="rounded-lg border border-gray-200 bg-white p-3">
+          <p class="text-xs font-semibold text-gray-500 mb-2">${escapeHtml(d)}</p>
+          <div class="space-y-2">
+            ${byDate.get(d).map((c) => `
+              <div class="rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5">
+                <p class="text-sm text-sky-900">${escapeHtml(c.title || '')}</p>
+                <div class="mt-1 h-1.5 rounded bg-sky-200 overflow-hidden">
+                  <div class="h-full bg-sky-500" style="width:${c.completed ? '100' : '55'}%"></div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -114,7 +235,7 @@ export function reRenderCards() {
  * @param {number} [order=0]
  * @returns {Promise<string>} New card document ID
  */
-export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null) {
+export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null, recurring = false, recurrenceFrequency = null) {
   const boardId = getBoardId();
   const ref = await addDoc(collection(db, 'cards'), {
     boardId,
@@ -126,6 +247,8 @@ export async function createCard(columnId, title, description = '', order = 0, c
     checkable,
     subtasks:    subtasks,
     dueDate:     dueDate || null,
+    recurring:   Boolean(recurring),
+    recurrenceFrequency: recurring ? (recurrenceFrequency || 'weekly') : null,
     attachments: attachments,
     cardColor:   cardColor || null,
     cardBgColor: cardBgColor || null,
@@ -217,9 +340,26 @@ export async function moveCard(cardId, newColumnId, prevOrder, nextOrder) {
  * @param {Array<Object>} cards
  */
 function renderAllCards(cards) {
+  const visible = _applyActiveFilters(cards);
+  const q = _filterQuery;
+
+  // Update filter count badge
+  const countEl = document.getElementById('board-filter-count');
+  const hasFilter = q || _filterChips.size > 0;
+  if (countEl) {
+    if (hasFilter) {
+      countEl.textContent = `${visible.length} of ${cards.length} cards`;
+      countEl.classList.remove('hidden');
+    } else {
+      countEl.classList.add('hidden');
+    }
+  }
+  const clearBtn = document.getElementById('filter-clear-btn');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !hasFilter);
+
   // Group by column
   const byColumn = {};
-  cards.forEach((card) => {
+  visible.forEach((card) => {
     if (!byColumn[card.columnId]) byColumn[card.columnId] = [];
     byColumn[card.columnId].push(card);
   });
@@ -229,9 +369,16 @@ function renderAllCards(cards) {
     const columnId = listEl.dataset.columnId;
     const colCards = byColumn[columnId] || [];
 
+    // Detect if this column is a "done" type column
+    const colEl = listEl.closest('.column');
+    const colTitleRaw = colEl?.querySelector('.col-title-input')?.value
+      || colEl?.querySelector('.col-title-input')?.dataset?.original
+      || columnId || '';
+    const isDoneColumn = /\bdone\b|\bfinished\b|\bcomplete[d]?\b|\bdeployment\b|\bresolved\b/i.test(colTitleRaw);
+
     listEl.innerHTML = '';
     colCards.forEach((card) => {
-      listEl.appendChild(buildCardEl(card));
+      listEl.appendChild(buildCardEl(card, isDoneColumn));
     });
 
     updateColumnCount(columnId, colCards.length);
@@ -239,19 +386,29 @@ function renderAllCards(cards) {
 
   // Re-init drag handles after every render
   initDragAndDrop();
+
+  if (!document.getElementById('board-list-view')?.classList.contains('hidden')) {
+    renderListView();
+  }
+  if (!document.getElementById('board-calendar-view')?.classList.contains('hidden')) {
+    renderCalendarView();
+  }
 }
 
 /**
  * Builds the DOM element for a single card.
  * @param {{ id: string, title: string, description: string }} card
+ * @param {boolean} [isDoneColumn=false]
  * @returns {HTMLElement}
  */
-function buildCardEl(card) {
+function buildCardEl(card, isDoneColumn = false) {
   const el = document.createElement('div');
   const isCompleted = Boolean(card.completed);
   const subtasks = Array.isArray(card.subtasks) ? card.subtasks : [];
   const attachments = Array.isArray(card.attachments) ? card.attachments : [];
   const dueDate = card.dueDate || null;
+  const recurring = Boolean(card.recurring);
+  const recurrenceFrequency = String(card.recurrenceFrequency || 'weekly');
 
   el.className      = [
     'card relative rounded-lg p-2.5 pb-8 cursor-grab active:cursor-grabbing',
@@ -266,6 +423,8 @@ function buildCardEl(card) {
   el.dataset.subtasks = JSON.stringify(subtasks);
   el.dataset.checkable = String(Boolean(card.checkable));
   el.dataset.dueDate  = dueDate || '';
+  el.dataset.recurring = String(recurring);
+  el.dataset.recurrenceFrequency = recurrenceFrequency;
   el.dataset.attachments = JSON.stringify(attachments);
   el.dataset.cardColor = card.cardColor || '';
   el.dataset.cardBgColor = card.cardBgColor || '';
@@ -301,26 +460,35 @@ function buildCardEl(card) {
       </svg>${label}</span>`;
   }
 
+  let recurringBadge = '';
+  if (recurring) {
+    recurringBadge = `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 bg-emerald-500/15 text-emerald-200 border-emerald-400/25" title="Recurring ${_formatRecurrenceFrequency(recurrenceFrequency)}">
+      <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M20 10a8 8 0 00-14.9-4M4 14a8 8 0 0014.9 4"/>
+      </svg>${_formatRecurrenceFrequency(recurrenceFrequency)}</span>`;
+  }
+
   // Attachment badge
   let attachBadge = '';
   if (attachments.length) {
-    attachBadge = `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 bg-white/10 text-white/50 border-white/15">
+    attachBadge = `<button type="button" class="preview-attachments-btn inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 bg-white/10 text-white/50 border-white/15 hover:bg-white/20 hover:text-white transition-colors" data-attachment-index="0" title="Preview attachments">
       <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
-      </svg>${attachments.length}</span>`;
+      </svg>${attachments.length}</button>`;
   }
 
   const subtasksHtml = subtasks.map((task) => `
     <label class="flex items-center gap-2 text-[11px] text-white/60 mt-0.5 pl-5 border-l border-white/10 ml-1">
       <input
         type="checkbox"
-        class="subtask-check flex-shrink-0 rounded border-white/30 bg-transparent text-brand-500 focus:ring-brand-400"
+        class="subtask-check w-3.5 h-3.5 flex-shrink-0 rounded border-white/30 bg-transparent text-brand-500 focus:ring-brand-400"
         data-card-id="${card.id}"
         data-subtask-id="${escapeHtml(task.id)}"
         ${task.completed ? 'checked' : ''}
       />
       <span class="${task.completed ? 'line-through text-white/35' : 'text-white/60'}">${escapeHtml(task.title)}</span>
+      ${task.assignee ? `<span class="text-[10px] text-white/40">@${escapeHtml(_boardAssignedMembers.find((m) => m.uid === task.assignee)?.username || 'member')}</span>` : ''}
     </label>
   `).join('');
 
@@ -329,11 +497,11 @@ function buildCardEl(card) {
       <label class="flex items-start gap-2 flex-1 cursor-pointer">
         ${card.checkable ? `<input
           type="checkbox"
-          class="task-check mt-0.5 rounded border-white/40 bg-transparent text-brand-500 focus:ring-brand-400"
+          class="task-check w-3.5 h-3.5 mt-0.5 rounded border-white/40 bg-transparent text-brand-500 focus:ring-brand-400"
           data-card-id="${card.id}"
           ${isCompleted ? 'checked' : ''}
         />` : ''}
-        <p class="card-title text-sm font-medium leading-snug ${isCompleted ? 'line-through text-white/60' : 'text-white'}">${escapeHtml(card.title)}${subtasks.length ? `<span class="ml-1.5 text-[10px] font-normal text-white/40 align-middle">${subtasks.filter(t => t.completed).length}/${subtasks.length}</span>` : ''}</p>
+        <p class="card-title text-sm font-medium leading-snug ${isCompleted ? 'line-through text-white/60' : 'text-white'}">${isDoneColumn ? '<svg class="inline-block w-3.5 h-3.5 mr-1 text-emerald-400 -mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' : ''}${escapeHtml(card.title)}${subtasks.length ? `<span class="ml-1.5 text-[10px] font-normal text-white/40 align-middle">${subtasks.filter(t => t.completed).length}/${subtasks.length}</span>` : ''}</p>
       </label>
       <div class="card-actions flex-shrink-0 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button class="add-subtask-btn text-white/45 hover:text-brand-100 p-0.5 rounded" data-card-id="${card.id}" title="Add sub task">
@@ -347,6 +515,11 @@ function buildCardEl(card) {
               d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 0l.172.172a2 2 0 010 2.828L12 16H9v-3z"/>
           </svg>
         </button>
+        <button class="clone-card-btn text-white/45 hover:text-brand-100 p-0.5 rounded" data-card-id="${card.id}" title="Clone card">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+          </svg>
+        </button>
         <button class="delete-card-btn text-white/45 hover:text-red-300 p-0.5 rounded" data-card-id="${card.id}" title="Delete">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -356,7 +529,8 @@ function buildCardEl(card) {
     </div>
     ${card.description ? `<p class="card-desc mt-1 text-xs text-white/60 line-clamp-2">${escapeHtml(card.description)}</p>` : ''}
     ${subtasks.length ? `<div class="mt-1">${subtasksHtml}</div>` : ''}
-    ${(dueDateHtml || attachBadge) ? `<div class="flex items-center gap-1.5 flex-wrap mt-1.5">${dueDateHtml}${attachBadge}</div>` : ''}
+    ${(dueDateHtml || recurringBadge || attachBadge) ? `<div class="flex items-center gap-1.5 flex-wrap mt-1.5">${dueDateHtml}${recurringBadge}${attachBadge}</div>` : ''}
+    ${_buildAssigneeChips(card.assignees)}
     <button class="move-card-prev-btn" data-card-id="${card.id}" title="Move to previous column">
       <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/>
@@ -402,11 +576,55 @@ function buildCardEl(card) {
  */
 export function setCurrentUser(user) {
   _currentUid = user.uid;
+  _currentUserDisplayName = user.displayName || user.email || 'User';
 }
 
 export function initCardEvents(user) {
   // Store uid for createCard calls
   _currentUid = user.uid;
+
+  // Reset search filter on every board open
+  _filterQuery = '';
+  _filterChips = new Set();
+  const searchInput = document.getElementById('board-search-input');
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.addEventListener('input', () => filterCards(searchInput.value));
+  }
+
+  // Chip filter buttons
+  const CHIP_IDS = [
+    { id: 'filter-overdue-btn',    key: 'overdue',    activeClass: 'border-red-400 text-red-600 bg-red-50' },
+    { id: 'filter-today-btn',      key: 'today',      activeClass: 'border-amber-400 text-amber-600 bg-amber-50' },
+    { id: 'filter-recurring-btn',  key: 'recurring',  activeClass: 'border-emerald-400 text-emerald-600 bg-emerald-50' },
+  ];
+  const INACTIVE = 'border-gray-200 bg-white text-gray-500';
+
+  CHIP_IDS.forEach(({ id, key, activeClass }) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      if (_filterChips.has(key)) {
+        _filterChips.delete(key);
+        btn.className = btn.className.replace(activeClass, INACTIVE);
+      } else {
+        _filterChips.add(key);
+        btn.className = btn.className.replace(INACTIVE, activeClass);
+      }
+      renderAllCards(_lastCards);
+    });
+  });
+
+  document.getElementById('filter-clear-btn')?.addEventListener('click', () => {
+    _filterQuery = '';
+    _filterChips = new Set();
+    if (searchInput) searchInput.value = '';
+    CHIP_IDS.forEach(({ id, key, activeClass }) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.className = btn.className.replace(activeClass, INACTIVE);
+    });
+    renderAllCards(_lastCards);
+  });
 
   const board = document.getElementById('board-root');
 
@@ -424,10 +642,16 @@ export function initCardEvents(user) {
     if (taskCheck) {
       const isCompleted = Boolean(taskCheck.checked);
       await updateCard(taskCheck.dataset.cardId, { completed: isCompleted });
+      const cardEl = taskCheck.closest('.card');
       if (isCompleted) {
-        const cardEl = taskCheck.closest('.card');
         const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
         _logCompletion(taskCheck.dataset.cardId, cardTitle, 'task');
+        // Recurring automation: clone card into first column with next due date
+        if (cardEl?.dataset.recurring === 'true') {
+          _handleRecurringComplete(taskCheck.dataset.cardId, cardEl).catch((err) =>
+            console.warn('Recurring clone failed:', err)
+          );
+        }
       }
       return;
     }
@@ -456,6 +680,17 @@ export function initCardEvents(user) {
     if (addSubtaskBtn) {
       const cardEl = addSubtaskBtn.closest('.card');
       _openAddSubtaskModal(addSubtaskBtn.dataset.cardId, cardEl);
+      return;
+    }
+
+    // ── Preview attachments ──────────────────────────────────────────────
+    const previewAttachBtn = e.target.closest('.preview-attachments-btn');
+    if (previewAttachBtn) {
+      const cardEl = previewAttachBtn.closest('.card');
+      let attachments = [];
+      try { attachments = JSON.parse(cardEl?.dataset.attachments || '[]'); } catch (_) {}
+      const startIdx = Number(previewAttachBtn.dataset.attachmentIndex || 0);
+      _openAttachmentPreviewModal(attachments, startIdx);
       return;
     }
 
@@ -544,12 +779,7 @@ export function initCardEvents(user) {
     // ── Add card ──────────────────────────────────────────────────────────
     const addBtn = e.target.closest('.add-card-btn');
     if (addBtn) {
-      const colEl = addBtn.closest('.column');
-      const colorBtn = colEl?.querySelector('.col-quick-color-btn');
-      const bgBtn = colEl?.querySelector('.col-quick-bg-btn');
-      const preColor = colorBtn?.dataset?.selectedColor || null;
-      const preBgColor = bgBtn?.dataset?.selectedColor || null;
-      openCardModal({ columnId: addBtn.dataset.columnId, cardColor: preColor || null, cardBgColor: preBgColor || null });
+      openCardModal({ columnId: addBtn.dataset.columnId });
       return;
     }
 
@@ -560,9 +790,14 @@ export function initCardEvents(user) {
       let checkable = false;
       let subtasks = [];
       let attachments = [];
+      let recurring = false;
+      let recurrenceFrequency = 'weekly';
       try { checkable = JSON.parse(cardEl.dataset.checkable ?? 'false'); } catch (_) {}
       subtasks = _readSubtasksFromCardEl(cardEl);
       try { attachments = JSON.parse(cardEl.dataset.attachments || '[]'); } catch (_) {}
+      try { recurring = JSON.parse(cardEl.dataset.recurring ?? 'false'); } catch (_) {}
+      recurrenceFrequency = cardEl.dataset.recurrenceFrequency || 'weekly';
+      const fullCard = _lastCards.find((c) => c.id === editBtn.dataset.cardId) || {};
       openCardModal({
         cardId:      editBtn.dataset.cardId,
         title:       cardEl.querySelector('.card-title').textContent.replace(/\s*\d+\/\d+$/, '').trim(),
@@ -570,9 +805,11 @@ export function initCardEvents(user) {
         checkable,
         subtasks,
         dueDate:     cardEl.dataset.dueDate || null,
+        recurring,
+        recurrenceFrequency,
         attachments,
-        cardColor:   cardEl.dataset.cardColor || null,
-        cardBgColor: cardEl.dataset.cardBgColor || null,
+        comments:    Array.isArray(fullCard.comments) ? fullCard.comments : [],
+        assignees:   Array.isArray(fullCard.assignees) ? fullCard.assignees : [],
       });
       return;
     }
@@ -584,6 +821,14 @@ export function initCardEvents(user) {
       const cardEl    = delBtn.closest('.card');
       const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.trim() || 'this card';
       _openDeleteCardModal(cardId, cardTitle);
+      return;
+    }
+
+    // ── Clone card ────────────────────────────────────────────────────────
+    const cloneBtn = e.target.closest('.clone-card-btn');
+    if (cloneBtn) {
+      const cardEl = cloneBtn.closest('.card');
+      await _cloneCard(cloneBtn.dataset.cardId, cardEl);
       return;
     }
 
@@ -638,6 +883,107 @@ async function _moveCardToAdjacentColumn(cardId, direction) {
 
 export function openNewCardModal(columnId = 'todo') {
   openCardModal({ columnId });
+}
+
+function _attachmentPreviewHtml(attachment) {
+  const file = attachment || {};
+  const url = String(file.url || '');
+  const type = String(file.type || '').toLowerCase();
+  const lowerUrl = url.toLowerCase();
+
+  const isImage = type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/.test(lowerUrl);
+  if (isImage) {
+    return `<img src="${escapeHtml(url)}" alt="${escapeHtml(file.name || 'Attachment preview')}" class="max-h-[60vh] w-auto max-w-full object-contain rounded-lg mx-auto" />`;
+  }
+
+  const isPdf = type === 'application/pdf' || /\.pdf(\?|$)/.test(lowerUrl);
+  if (isPdf) {
+    return `<iframe src="${escapeHtml(url)}" class="w-full h-[60vh] rounded-lg border border-gray-200 bg-white" title="PDF preview"></iframe>`;
+  }
+
+  const isVideo = type.startsWith('video/') || /\.(mp4|webm|ogg|mov)(\?|$)/.test(lowerUrl);
+  if (isVideo) {
+    return `<video controls src="${escapeHtml(url)}" class="w-full max-h-[60vh] rounded-lg bg-black"></video>`;
+  }
+
+  const isAudio = type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a)(\?|$)/.test(lowerUrl);
+  if (isAudio) {
+    return `<audio controls src="${escapeHtml(url)}" class="w-full"></audio>`;
+  }
+
+  return `
+    <div class="rounded-lg border border-gray-200 bg-white p-6 text-center">
+      <p class="text-sm text-gray-700 mb-2">Preview not available for this file type.</p>
+      <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="text-sm font-medium text-brand-600 hover:text-brand-700 hover:underline">Open file in new tab</a>
+    </div>
+  `;
+}
+
+function _openAttachmentPreviewModal(attachments, startIndex = 0) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return;
+
+  const modalRoot = document.getElementById('modal-root');
+  if (!modalRoot) return;
+
+  let activeIndex = Math.min(Math.max(startIndex, 0), attachments.length - 1);
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <h3 class="text-sm font-semibold text-gray-800">Attachment preview</h3>
+          <button id="attachment-preview-close" class="p-1 text-gray-400 hover:text-gray-600 transition-colors rounded-lg hover:bg-gray-100" aria-label="Close preview">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+        <div id="attachment-preview-tabs" class="px-4 py-2 border-b border-gray-100 flex flex-wrap gap-2"></div>
+        <div id="attachment-preview-body" class="flex-1 overflow-auto p-4 bg-slate-50"></div>
+        <div class="px-4 py-3 border-t border-gray-100 flex items-center justify-between gap-3">
+          <p id="attachment-preview-meta" class="text-xs text-gray-500 truncate"></p>
+          <a id="attachment-preview-open" href="#" target="_blank" rel="noopener noreferrer" class="text-xs font-medium text-brand-600 hover:text-brand-700 hover:underline">Open in new tab</a>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('attachment-preview-close')?.addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+
+  const tabsEl = document.getElementById('attachment-preview-tabs');
+  const bodyEl = document.getElementById('attachment-preview-body');
+  const openEl = document.getElementById('attachment-preview-open');
+  const metaEl = document.getElementById('attachment-preview-meta');
+
+  const render = () => {
+    const current = attachments[activeIndex] || {};
+    if (tabsEl) {
+      tabsEl.innerHTML = attachments.map((a, idx) => {
+        const active = idx === activeIndex;
+        return `<button type="button" class="attachment-tab px-2.5 py-1 rounded-md text-xs border transition-colors ${active ? 'bg-brand-50 text-brand-700 border-brand-200' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}" data-index="${idx}" title="${escapeHtml(a.name || 'Attachment')}">${escapeHtml(a.name || `Attachment ${idx + 1}`)}</button>`;
+      }).join('');
+      tabsEl.querySelectorAll('.attachment-tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          activeIndex = Number(btn.dataset.index || 0);
+          render();
+        });
+      });
+    }
+
+    if (bodyEl) bodyEl.innerHTML = _attachmentPreviewHtml(current);
+    if (openEl) openEl.href = current.url || '#';
+    if (metaEl) {
+      const sizeKb = Number(current.size) ? `${Math.max(1, Math.round(Number(current.size) / 1024))} KB` : '';
+      const type = current.type || 'Unknown type';
+      metaEl.textContent = [current.name || 'Attachment', type, sizeKb].filter(Boolean).join(' • ');
+    }
+  };
+
+  render();
 }
 
 // ─── Subtask modal ────────────────────────────────────────────────────────────
@@ -727,6 +1073,7 @@ function _openAddSubtaskModal(cardId, cardEl) {
         id: `sub-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
         title,
         completed: false,
+        assignee: null,
       })),
     ];
 
@@ -746,6 +1093,27 @@ function _openAddSubtaskModal(cardId, cardEl) {
  * Fire-and-forget — failures are silently swallowed so they never block the UI.
  */
 async function _logCompletion(cardId, cardTitle, type, extra = {}) {
+  // Always append to local timeline cache so Timeline works even when
+  // Firestore completionLog permissions are not deployed yet.
+  try {
+    const key = 'pmdek-completion-log';
+    const current = JSON.parse(localStorage.getItem(key) || '[]');
+    current.push({
+      id: `local-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      cardId,
+      cardTitle,
+      boardId: getBoardId(),
+      userId: _currentUid,
+      type,
+      ...extra,
+      completedAtIso: new Date().toISOString(),
+    });
+    // Keep most recent 1000 events to cap storage growth.
+    localStorage.setItem(key, JSON.stringify(current.slice(-1000)));
+  } catch (_) {
+    // ignore local storage failures
+  }
+
   try {
     await addDoc(collection(db, 'completionLog'), {
       cardId,
@@ -788,7 +1156,7 @@ async function _uploadAttachments(files, userId) {
  *
  * @param {{ columnId?: string, cardId?: string, title?: string, description?: string }} opts
  */
-function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null }) {
+function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], dueDate = null, recurring = false, recurrenceFrequency = 'weekly', attachments = [], comments = [], assignees = [] }) {
   const modalRoot = document.getElementById('modal-root');
   const isEdit    = Boolean(cardId);
 
@@ -796,16 +1164,55 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   let editSubtasks = subtasks.map((s) => ({ ...s }));
   // Local mutable copy of attachments
   let editAttachments = attachments.map((a) => ({ ...a }));
+  // Local mutable copy of comments
+  let editComments = Array.isArray(comments) ? [...comments] : [];
   // Pending new files chosen via file input
   let pendingFiles = [];
-  // Selected card color
-  let selectedCardColor = cardColor || null;
-  let selectedCardBgColor = cardBgColor || null;
+    // Local mutable set of assigned UIDs (only relevant in edit mode)
+    let editAssignees = new Set(Array.isArray(assignees) ? assignees : []);
+
+    // ── Assignees helpers ──────────────────────────────────────────────────────
+    const _assigneesSectionInner = () => {
+      if (!isEdit || _boardAssignedMembers.length === 0) return '';
+      const rows = _boardAssignedMembers.map((p) => {
+        const checked = editAssignees.has(p.uid);
+        const bg      = _uidToColor(p.uid);
+        const initials = (p.displayName || p.username || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+        const label   = p.displayName ? `${p.displayName} (@${p.username || ''})` : `@${p.username || p.uid}`;
+        return `
+          <label class="flex items-center gap-2.5 cursor-pointer py-1">
+            <input type="checkbox" class="modal-assignee-check rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+              data-uid="${escapeHtml(p.uid)}" ${checked ? 'checked' : ''} />
+            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-bold text-white flex-shrink-0" style="background:${bg}">${escapeHtml(initials)}</span>
+            <span class="text-sm text-gray-700 truncate">${escapeHtml(label)}</span>
+          </label>`;
+      }).join('');
+      return `
+        <div class="flex items-center justify-between mb-1">
+          <p class="text-sm font-medium text-gray-700">Assignees</p>
+        </div>
+        <div id="modal-assignees-list" class="flex flex-col">${rows}</div>`;
+    };
+
+    const _bindAssigneeSectionEvents = () => {
+      document.querySelectorAll('.modal-assignee-check').forEach((chk) => {
+        chk.addEventListener('change', () => {
+          if (chk.checked) editAssignees.add(chk.dataset.uid);
+          else editAssignees.delete(chk.dataset.uid);
+        });
+      });
+    };
 
   const _subtaskRowHtml = (s) => `
     <li class="flex items-center gap-2 group" data-subtask-id="${escapeHtml(s.id)}">
       <input type="checkbox" class="modal-subtask-check flex-shrink-0 rounded border-gray-300 text-brand-500 focus:ring-brand-400" ${s.completed ? 'checked' : ''} />
       <input type="text" class="modal-subtask-title flex-1 text-sm border-0 border-b border-transparent focus:border-gray-300 focus:ring-0 bg-transparent px-0 py-0.5 ${s.completed ? 'line-through text-gray-400' : 'text-gray-700'}" value="${escapeHtml(s.title)}" placeholder="Subtask…" maxlength="200" />
+      ${_boardAssignedMembers.length > 0 ? `
+        <select class="modal-subtask-assignee rounded border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500" data-subtask-id="${escapeHtml(s.id)}">
+          <option value="">Unassigned</option>
+          ${_boardAssignedMembers.map((m) => `<option value="${escapeHtml(m.uid)}" ${s.assignee === m.uid ? 'selected' : ''}>${escapeHtml(m.displayName || `@${m.username || m.uid}`)}</option>`).join('')}
+        </select>
+      ` : ''}
       <button type="button" class="modal-subtask-delete flex-shrink-0 text-gray-300 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100" title="Remove">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
@@ -832,7 +1239,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
 
   const _addNewSubtaskRow = () => {
     const id = `sub-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    editSubtasks.push({ id, title: '', completed: false });
+    editSubtasks.push({ id, title: '', completed: false, assignee: null });
     _renderSubtasks();
     // Focus the newly added input
     const list = document.getElementById('modal-subtask-list');
@@ -867,6 +1274,13 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
       });
       inp.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); _addNewSubtaskRow(); }
+      });
+    });
+
+    section.querySelectorAll('.modal-subtask-assignee').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const id = sel.dataset.subtaskId;
+        editSubtasks = editSubtasks.map((s) => s.id === id ? { ...s, assignee: sel.value || null } : s);
       });
     });
 
@@ -954,6 +1368,74 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     }
   };
 
+  // ── Comments helpers ───────────────────────────────────────────────────────
+
+  const _commentRowHtml = (c) => `
+    <li class="flex flex-col gap-0.5 py-2 border-b border-gray-100 last:border-0">
+      <div class="flex items-center gap-2">
+        <span class="text-xs font-semibold text-gray-800">${escapeHtml(c.displayName || 'User')}</span>
+        <span class="text-[10px] text-gray-400">${_formatCommentTime(c.createdAt)}</span>
+      </div>
+      <p class="text-sm text-gray-600 whitespace-pre-wrap">${escapeHtml(c.text || '')}</p>
+    </li>
+  `;
+
+  const _commentsSectionInner = () => `
+    <div class="flex items-center justify-between mb-1">
+      <p class="text-sm font-medium text-gray-700">Comments</p>
+    </div>
+    ${editComments.length ? `<ul id="modal-comments-list" class="flex flex-col mb-3 max-h-48 overflow-y-auto">${editComments.map(_commentRowHtml).join('')}</ul>` : '<p class="text-xs text-gray-400 mb-2">No comments yet.</p>'}
+    <div class="flex gap-2">
+      <input id="modal-comment-input" type="text" placeholder="Add a comment…" maxlength="500"
+        class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+      <button type="button" id="modal-comment-submit"
+        class="px-3 py-1.5 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors flex-shrink-0">
+        Post
+      </button>
+    </div>
+  `;
+
+  const _renderComments = () => {
+    const section = document.getElementById('modal-comments-section');
+    if (section) {
+      section.innerHTML = _commentsSectionInner();
+      _bindCommentEvents();
+    }
+  };
+
+  const _bindCommentEvents = () => {
+    const submitBtn = document.getElementById('modal-comment-submit');
+    submitBtn?.addEventListener('click', async () => {
+      const input = document.getElementById('modal-comment-input');
+      const text = (input?.value || '').trim();
+      if (!text || !cardId) return;
+      submitBtn.disabled = true;
+      // Read freshest comments from live snapshot
+      const freshCard = _lastCards.find((c) => c.id === cardId) || {};
+      const freshComments = Array.isArray(freshCard.comments) ? freshCard.comments : [];
+      const newComment = {
+        id: `cmnt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        userId: _currentUid || '',
+        displayName: _currentUserDisplayName || 'User',
+        text,
+        createdAt: new Date().toISOString(),
+      };
+      editComments = [...freshComments, newComment];
+      try {
+        await updateCard(cardId, { comments: editComments });
+        if (input) input.value = '';
+        _renderComments();
+      } catch (err) {
+        console.error('Comment save failed:', err);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+    document.getElementById('modal-comment-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('modal-comment-submit')?.click(); }
+    });
+  };
+
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
       <div class="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6">
@@ -990,6 +1472,28 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
               value="${dueDate || ''}"
             />
           </div>
+          <div>
+            <label class="flex items-center gap-2.5 cursor-pointer select-none">
+              <input
+                id="card-recurring"
+                type="checkbox"
+                class="rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+                ${recurring ? 'checked' : ''}
+              />
+              <span class="text-sm text-gray-600">Recurring</span>
+            </label>
+            <div id="card-recurrence-wrap" class="mt-2 ${recurring ? '' : 'hidden'}">
+              <label class="block text-sm font-medium text-gray-700 mb-1" for="card-recurrence-frequency">Frequency</label>
+              <select id="card-recurrence-frequency"
+                class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+                <option value="daily" ${recurrenceFrequency === 'daily' ? 'selected' : ''}>Daily</option>
+                <option value="weekly" ${recurrenceFrequency === 'weekly' ? 'selected' : ''}>Weekly</option>
+                <option value="monthly" ${recurrenceFrequency === 'monthly' ? 'selected' : ''}>Monthly</option>
+                <option value="quarterly" ${recurrenceFrequency === 'quarterly' ? 'selected' : ''}>Quarterly</option>
+                <option value="annual" ${recurrenceFrequency === 'annual' ? 'selected' : ''}>Annual</option>
+              </select>
+            </div>
+          </div>
           <label class="flex items-center gap-2.5 cursor-pointer select-none">
             <input
               id="card-checkable"
@@ -999,32 +1503,10 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
             />
             <span class="text-sm text-gray-600">Make task checkable</span>
           </label>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-2">Card Color <span class="text-gray-400 font-normal">(optional)</span></label>
-            <div class="flex gap-2 flex-wrap items-center" id="card-color-swatches">
-              ${CARD_COLORS.map((c) => `<button type="button" data-color="${c.value}"
-                class="card-color-swatch w-5 h-5 rounded-full border-2 hover:scale-110 transition-transform"
-                style="background:${c.value};border-color:${cardColor === c.value ? '#374151' : 'transparent'};${cardColor === c.value ? `outline:2px solid ${c.value}40;` : ''}"
-                title="${c.label}"></button>`).join('')}
-              <button type="button" id="card-color-clear"
-                class="text-xs text-gray-400 hover:text-gray-600 transition-colors ml-1">Clear</button>
-            </div>
-            <input type="hidden" id="card-color-value" value="${cardColor || ''}" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-2">Card Background <span class="text-gray-400 font-normal">(optional)</span></label>
-            <div class="flex gap-2 flex-wrap items-center" id="card-bg-swatches">
-              ${CARD_COLORS.map((c) => `<button type="button" data-color="${c.value}"
-                class="card-bg-swatch w-5 h-5 rounded-full border-2 hover:scale-110 transition-transform"
-                style="background:${c.value};border-color:${cardBgColor === c.value ? '#374151' : 'transparent'};${cardBgColor === c.value ? `outline:2px solid ${c.value}40;` : ''}"
-                title="${c.label}"></button>`).join('')}
-              <button type="button" id="card-bg-clear"
-                class="text-xs text-gray-400 hover:text-gray-600 transition-colors ml-1">Clear</button>
-            </div>
-            <input type="hidden" id="card-bg-value" value="${cardBgColor || ''}" />
-          </div>
           ${isEdit ? `<div id="modal-subtasks-section">${_subtasksSectionInner()}</div>` : ''}
           <div id="modal-attachments-section">${_attachmentsSectionInner()}</div>
+            ${isEdit && _boardAssignedMembers.length > 0 ? `<div id="modal-assignees-section" class="border-t border-gray-100 pt-3">${_assigneesSectionInner()}</div>` : ''}
+            ${isEdit ? `<div id="modal-comments-section" class="border-t border-gray-100 pt-3">${_commentsSectionInner()}</div>` : ''}
           <div class="flex justify-end gap-2 pt-2">
             <button type="button" id="modal-cancel"
               class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
@@ -1045,53 +1527,20 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   input.focus();
   _bindSubtaskSectionEvents();
   _bindAttachmentSectionEvents();
+  if (isEdit) _bindCommentEvents();
+    if (isEdit) _bindAssigneeSectionEvents();
 
-  // Card color swatch selection
-  document.getElementById('card-color-swatches')?.querySelectorAll('.card-color-swatch').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.card-color-swatch').forEach((b) => {
-        b.style.borderColor = 'transparent';
-        b.style.outline = 'none';
-      });
-      btn.style.borderColor = '#374151';
-      btn.style.outline = `2px solid ${btn.dataset.color}40`;
-      selectedCardColor = btn.dataset.color;
-      const hiddenInput = document.getElementById('card-color-value');
-      if (hiddenInput) hiddenInput.value = btn.dataset.color;
-    });
-  });
-  document.getElementById('card-color-clear')?.addEventListener('click', () => {
-    document.querySelectorAll('.card-color-swatch').forEach((b) => {
-      b.style.borderColor = 'transparent';
-      b.style.outline = 'none';
-    });
-    selectedCardColor = null;
-    const hiddenInput = document.getElementById('card-color-value');
-    if (hiddenInput) hiddenInput.value = '';
-  });
-
-  document.getElementById('card-bg-swatches')?.querySelectorAll('.card-bg-swatch').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.card-bg-swatch').forEach((b) => {
-        b.style.borderColor = 'transparent';
-        b.style.outline = 'none';
-      });
-      btn.style.borderColor = '#374151';
-      btn.style.outline = `2px solid ${btn.dataset.color}40`;
-      selectedCardBgColor = btn.dataset.color;
-      const hiddenInput = document.getElementById('card-bg-value');
-      if (hiddenInput) hiddenInput.value = btn.dataset.color;
-    });
-  });
-  document.getElementById('card-bg-clear')?.addEventListener('click', () => {
-    document.querySelectorAll('.card-bg-swatch').forEach((b) => {
-      b.style.borderColor = 'transparent';
-      b.style.outline = 'none';
-    });
-    selectedCardBgColor = null;
-    const hiddenInput = document.getElementById('card-bg-value');
-    if (hiddenInput) hiddenInput.value = '';
-  });
+  const recurringCheckbox = document.getElementById('card-recurring');
+  const recurrenceWrap = document.getElementById('card-recurrence-wrap');
+  const recurrenceSelect = document.getElementById('card-recurrence-frequency');
+  const _toggleRecurrenceVisibility = () => {
+    if (!recurrenceWrap) return;
+    const checked = Boolean(recurringCheckbox?.checked);
+    recurrenceWrap.classList.toggle('hidden', !checked);
+    if (checked && recurrenceSelect && !recurrenceSelect.value) recurrenceSelect.value = 'weekly';
+  };
+  recurringCheckbox?.addEventListener('change', _toggleRecurrenceVisibility);
+  _toggleRecurrenceVisibility();
 
   // Close on backdrop click or cancel button
   const close = () => { modalRoot.innerHTML = ''; };
@@ -1107,8 +1556,10 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     const newDesc      = document.getElementById('card-desc').value.trim();
     const newCheckable = document.getElementById('card-checkable').checked;
     const newDueDate   = document.getElementById('card-due-date').value || null;
-    const newCardColor = document.getElementById('card-color-value')?.value || null;
-    const newCardBgColor = document.getElementById('card-bg-value')?.value || null;
+    const newRecurring = Boolean(document.getElementById('card-recurring')?.checked);
+    const newRecurrenceFrequency = newRecurring
+      ? (document.getElementById('card-recurrence-frequency')?.value || 'weekly')
+      : null;
     if (!newTitle) return;
 
     const submitBtn = document.getElementById('modal-submit-btn');
@@ -1128,13 +1579,14 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
         await updateCard(cardId, {
           title: newTitle, description: newDesc, checkable: newCheckable,
           subtasks: finalSubtasks, dueDate: newDueDate, attachments: finalAttachments,
-          cardColor: newCardColor || null,
-          cardBgColor: newCardBgColor || null,
+          recurring: newRecurring,
+          recurrenceFrequency: newRecurrenceFrequency,
+            assignees: [...editAssignees],
         });
       } else {
         const listEl    = document.querySelector(`.card-list[data-column-id="${columnId}"]`);
         const lastOrder = listEl?.children.length ?? 0;
-        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, newCardColor || null, newCardBgColor || null);
+        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, null, null, newRecurring, newRecurrenceFrequency);
       }
       close();
     } catch (err) {
@@ -1147,11 +1599,72 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
 // ─── Module-private uid store ─────────────────────────────────────────────────
 
 let _currentUid = null;
+let _currentUserDisplayName = '';
 
 /** Returns the current uid for use in createCard. Exposed as a closure. */
 function auth_uid() {
   if (!_currentUid) throw new Error('User not set. Call initCardEvents() first.');
   return _currentUid;
+}
+
+/**
+ * Builds tiny assignee initials bubbles for the card tile footer.
+ * Only renders the first 3 assignees, then shows a "+N" overflow badge.
+ * @param {string[]} assignees  Array of UIDs
+ * @returns {string} HTML string
+ */
+function _buildAssigneeChips(assignees) {
+  if (!Array.isArray(assignees) || assignees.length === 0) return '';
+  const profiles = assignees
+    .map((uid) => _boardAssignedMembers.find((m) => m.uid === uid))
+    .filter(Boolean);
+  if (profiles.length === 0) return '';
+  const visible = profiles.slice(0, 3);
+  const overflow = profiles.length - visible.length;
+  const initials = (p) => {
+    const name = p.displayName || p.username || p.email || '?';
+    return name.split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  };
+  const chips = visible.map((p) => {
+    const bg = _uidToColor(p.uid);
+    const title = p.displayName ? `${p.displayName} (@${p.username || ''})` : `@${p.username || p.uid}`;
+    return `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold text-white flex-shrink-0" style="background:${bg}" title="${escapeHtml(title)}">${escapeHtml(initials(p))}</span>`;
+  }).join('');
+  const overflowHtml = overflow > 0
+    ? `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold bg-white/20 text-white/70 flex-shrink-0">+${overflow}</span>`
+    : '';
+  return `<div class="flex items-center gap-0.5 mt-1.5">${chips}${overflowHtml}</div>`;
+}
+
+/** Deterministic color from a UID string for assignee bubbles. */
+function _uidToColor(uid) {
+  const COLORS = ['#6366f1','#8b5cf6','#ec4899','#ef4444','#f97316','#d97706','#22c55e','#14b8a6','#3b82f6'];
+  let hash = 0;
+  for (let i = 0; i < uid.length; i++) hash = (hash * 31 + uid.charCodeAt(i)) >>> 0;
+  return COLORS[hash % COLORS.length];
+}
+
+/** Member profiles assigned to the current board — passed in from main.js. */
+let _boardAssignedMembers = [];
+
+/**
+ * Sets the list of member profiles for the currently open board.
+ * Called by main.js after loading board.assignedMembers profiles.
+ * @param {object[]} profiles  Array of user profile objects from /users/{uid}
+ */
+export function setBoardAssignedMembers(profiles) {
+  _boardAssignedMembers = Array.isArray(profiles) ? profiles : [];
+}
+
+function _formatRecurrenceFrequency(value) {
+  const map = {
+    daily: 'Daily',
+    weekly: 'Weekly',
+    monthly: 'Monthly',
+    quarterly: 'Quarterly',
+    annual: 'Annual',
+  };
+  return map[String(value || '').toLowerCase()] || 'Weekly';
 }
 
 // ─── Delete card modal ────────────────────────────────────────────────────────
@@ -1202,6 +1715,95 @@ function _openDeleteCardModal(cardId, cardTitle) {
     close();
     await deleteCard(cardId);
   });
+}
+
+// ─── Recurring automation ─────────────────────────────────────────────────────
+
+/**
+ * When a recurring card is checked complete, clone it into the first board
+ * column with its subtasks reset and the next due date applied.
+ */
+async function _handleRecurringComplete(cardId, cardEl) {
+  const firstCol = document.querySelector('#columns-wrapper .column');
+  const firstColumnId = firstCol?.dataset.columnId;
+  if (!firstColumnId) return;
+
+  const title = cardEl.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
+  const desc = cardEl.querySelector('.card-desc')?.textContent?.trim() || '';
+  const freq = cardEl.dataset.recurrenceFrequency || 'weekly';
+  const currentDue = cardEl.dataset.dueDate || null;
+  const nextDue = _computeNextDueDate(currentDue, freq);
+
+  let subtasks = [];
+  try { subtasks = JSON.parse(cardEl.dataset.subtasks || '[]'); } catch (_) {}
+  const freshSubtasks = subtasks.map((s) => ({
+    ...s,
+    id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    completed: false,
+  }));
+
+  const lastOrder = firstCol.querySelectorAll('.card').length;
+  await createCard(firstColumnId, title, desc, lastOrder, Boolean(cardEl.dataset.checkable === 'true'), freshSubtasks, nextDue, [], null, null, true, freq);
+}
+
+function _computeNextDueDate(currentDue, frequency) {
+  const base = currentDue ? new Date(currentDue + 'T00:00:00') : new Date();
+  switch (frequency) {
+    case 'daily':     base.setDate(base.getDate() + 1); break;
+    case 'weekly':    base.setDate(base.getDate() + 7); break;
+    case 'monthly':   base.setMonth(base.getMonth() + 1); break;
+    case 'quarterly': base.setMonth(base.getMonth() + 3); break;
+    case 'annual':    base.setFullYear(base.getFullYear() + 1); break;
+    default:          base.setDate(base.getDate() + 7);
+  }
+  return base.toISOString().split('T')[0];
+}
+
+// ─── Clone card ───────────────────────────────────────────────────────────────
+
+async function _cloneCard(cardId, cardEl) {
+  const columnId = cardEl.closest('.card-list')?.dataset.columnId;
+  if (!columnId) return;
+
+  const title = cardEl.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
+  const desc = cardEl.querySelector('.card-desc')?.textContent?.trim() || '';
+  let subtasks = [], attachments = [];
+  let recurring = false;
+  let recurrenceFrequency = 'weekly';
+  try { subtasks = JSON.parse(cardEl.dataset.subtasks || '[]'); } catch (_) {}
+  try { attachments = JSON.parse(cardEl.dataset.attachments || '[]'); } catch (_) {}
+  try { recurring = JSON.parse(cardEl.dataset.recurring || 'false'); } catch (_) {}
+  recurrenceFrequency = cardEl.dataset.recurrenceFrequency || 'weekly';
+
+  const freshSubtasks = subtasks.map((s) => ({
+    ...s,
+    id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    completed: false,
+  }));
+
+  const listEl = document.querySelector(`.card-list[data-column-id="${columnId}"]`);
+  const lastOrder = listEl?.children.length ?? 0;
+
+  await createCard(
+    columnId, `${title} (copy)`, desc, lastOrder,
+    Boolean(cardEl.dataset.checkable === 'true'),
+    freshSubtasks, cardEl.dataset.dueDate || null,
+    attachments, null, null, recurring, recurrenceFrequency,
+  );
+}
+
+// ─── Comment time helper ──────────────────────────────────────────────────────
+
+function _formatCommentTime(isoString) {
+  try {
+    const d = new Date(isoString);
+    const diffMin = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (diffMin < 1)  return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24)   return `${diffH}h ago`;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  } catch { return ''; }
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────

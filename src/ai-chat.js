@@ -10,14 +10,15 @@
  */
 
 import { generateBoardWithTasks, generateCard } from './ai.js';
-import { createBoard, setBoardId }              from './board.js';
-import { createCard, setCurrentUser, updateCard } from './cards.js';
+import { createBoard, setBoardId, PROJECT_TYPES, getDefaultColumnsForProjectType } from './board.js';
+import { createCard, setCurrentUser, updateCard, getCardsSnapshot } from './cards.js';
+import { getAiUsageSummary, consumeAiCredit } from './billing.js';
 
 const HISTORY_KEY = 'aiChatHistory';
 const MAX_HISTORY = 100;
 
 let _user           = null;
-let _mode           = 'boards'; // 'boards' | 'board'
+let _mode           = 'boards'; // 'boards' | 'board' | 'dashboard'
 let _onBoardCreated = null;     // callback(boardId, boardObj)
 let _submitting     = false;
 
@@ -36,6 +37,17 @@ export function initAiChat(user, { onBoardCreated } = {}) {
   document.getElementById('ai-chat-close-btn')
     ?.addEventListener('click', closeAiChat);
 
+  document.getElementById('ai-chat-expand-btn')
+    ?.addEventListener('click', () => {
+      const sidebar = document.getElementById('ai-chat-sidebar');
+      if (!sidebar) return;
+      if (sidebar.classList.contains('ai-chat-collapsed')) {
+        expandAiChat();
+      } else {
+        collapseAiChat();
+      }
+    });
+
   const form = document.getElementById('ai-chat-form');
   if (form) {
     form.addEventListener('submit', _handleSend);
@@ -49,6 +61,7 @@ export function initAiChat(user, { onBoardCreated } = {}) {
   }
 
   _renderHistory();
+  _refreshUsageBadge();
 }
 
 /**
@@ -61,9 +74,14 @@ export function setAiChatMode(mode) {
   _mode = mode;
   const input = document.getElementById('ai-chat-input');
   if (!input) return;
-  input.placeholder = mode === 'boards'
-    ? 'Describe a project to create a full deck…'
-    : 'Describe a task to add to the board…';
+  if (mode === 'boards') {
+    input.placeholder = 'Describe a project to create a full deck…';
+  } else if (mode === 'dashboard') {
+    input.placeholder = 'Ask about risks, priorities, capacity, or delivery forecast…';
+  } else {
+    input.placeholder = 'Describe a task to add to the board…';
+  }
+  _refreshUsageBadge();
 }
 
 /**
@@ -87,6 +105,42 @@ export function openAiChat() {
   _setButtonsActive(true);
   // Focus input after animation settles
   setTimeout(() => document.getElementById('ai-chat-input')?.focus(), 310);
+  _syncChatHeader();
+}
+
+export function setAiChatExpanded(expanded) {
+  const sidebar = document.getElementById('ai-chat-sidebar');
+  if (!sidebar) return;
+  sidebar.classList.toggle('ai-chat-expanded', Boolean(expanded));
+  if (expanded) sidebar.classList.remove('ai-chat-collapsed');
+  _syncChatHeader();
+}
+
+export function collapseAiChat() {
+  const sidebar = document.getElementById('ai-chat-sidebar');
+  if (!sidebar) return;
+  openAiChat();
+  sidebar.classList.remove('ai-chat-expanded');
+  sidebar.classList.add('ai-chat-collapsed');
+  _syncChatHeader();
+}
+
+export function expandAiChat() {
+  const sidebar = document.getElementById('ai-chat-sidebar');
+  if (!sidebar) return;
+  openAiChat();
+  sidebar.classList.remove('ai-chat-collapsed');
+  _syncChatHeader();
+}
+
+export function openAiChatWithPrompt(prompt, { expand = false } = {}) {
+  openAiChat();
+  setAiChatExpanded(expand);
+  const input = document.getElementById('ai-chat-input');
+  if (!input) return;
+  input.value = String(prompt || '');
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
 }
 
 export function closeAiChat() {
@@ -94,7 +148,24 @@ export function closeAiChat() {
   if (!sidebar) return;
   delete sidebar.dataset.open;
   sidebar.classList.add('translate-x-full');
+  sidebar.classList.remove('ai-chat-expanded');
+  sidebar.classList.remove('ai-chat-collapsed');
   _setButtonsActive(false);
+  _syncChatHeader();
+}
+
+function _syncChatHeader() {
+  const sidebar = document.getElementById('ai-chat-sidebar');
+  const btn = document.getElementById('ai-chat-expand-btn');
+  const title = document.getElementById('ai-chat-title');
+  if (!sidebar || !btn || !title) return;
+  const collapsed = sidebar.classList.contains('ai-chat-collapsed');
+  btn.title = collapsed ? 'Expand AI chat' : 'Collapse AI chat';
+  btn.setAttribute('aria-label', collapsed ? 'Expand AI chat' : 'Collapse AI chat');
+  btn.innerHTML = collapsed
+    ? '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'
+    : '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>';
+  title.textContent = collapsed ? 'AI' : 'AI Assistant';
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -262,49 +333,127 @@ async function _handleSend(e) {
   _showThinking();
 
   try {
-    if (_isTrivialMessage(text)) {
+    const usage = await getAiUsageSummary(_user.uid);
+    if (usage.remaining <= 0) {
       _removeThinking();
-      _addToHistory('assistant', "Hi! I'm your AI project assistant. Try describing a project — for example: \"Build a mobile app for tracking workouts\" — and I'll create a full deck with tasks.");
+      _addToHistory('assistant', `You've hit your daily AI limit (${usage.used}/${usage.limit}) on the ${usage.plan.label} plan. Upgrade in Billing or wait until tomorrow.`);
       return;
     }
+
+    // Every submitted chat message consumes one credit.
+    await consumeAiCredit(_user.uid);
+
+    if (_isTrivialMessage(text)) {
+      _removeThinking();
+      _addToHistory('assistant', "Hi! I'm your AI project assistant. Try describing a project — for example: \"Build a mobile app for tracking workouts\" — and I'll create a full deck with tasks. This message counted toward your daily AI usage.");
+      return;
+    }
+
     if (_mode === 'boards') {
       await _doBoardsMode(text);
+    } else if (_mode === 'dashboard') {
+      await _doDashboardMode(text);
     } else {
       await _doBoardMode(text);
     }
   } catch (err) {
     console.error('[ai-chat] error:', err);
     _removeThinking();
-    _addToHistory('assistant', 'Sorry, something went wrong. Please try again.');
+    const msg = String(err?.message || '').toLowerCase();
+    if (msg.includes('daily ai limit reached')) {
+      const usage = await getAiUsageSummary(_user.uid).catch(() => null);
+      if (usage) {
+        _addToHistory('assistant', `You've hit your daily AI limit (${usage.used}/${usage.limit}) on the ${usage.plan.label} plan. Upgrade in Billing or wait until tomorrow.`);
+      } else {
+        _addToHistory('assistant', "You've hit your daily AI limit. Upgrade in Billing or wait until tomorrow.");
+      }
+    } else if (msg.includes('permission') || msg.includes('unauthenticated')) {
+      _addToHistory('assistant', 'AI request failed due to permissions/session. Please sign in again and retry.');
+    } else {
+      _addToHistory('assistant', 'Sorry, something went wrong. Please try again.');
+    }
   } finally {
     _submitting = false;
     if (sendBtn) sendBtn.disabled = false;
     input.focus();
+    _refreshUsageBadge();
   }
+}
+
+async function _refreshUsageBadge() {
+  const el = document.getElementById('ai-chat-usage');
+  if (!el || !_user?.uid) return;
+  try {
+    const usage = await getAiUsageSummary(_user.uid);
+    el.textContent = `${usage.used}/${usage.limit} AI used today`;
+    el.title = 'Every sent AI chat message counts toward your daily limit.';
+    el.className = usage.remaining > 0
+      ? 'text-[11px] text-amber-800/80 mr-2'
+      : 'text-[11px] text-red-700 mr-2 font-semibold';
+  } catch (_) {
+    el.textContent = '';
+  }
+}
+
+// ─── Project type detection ───────────────────────────────────────────────────
+
+/** Maps keywords found in user text → project type value. */
+const PROJECT_TYPE_KEYWORDS = [
+  { value: 'weekly',        patterns: [/\bweekly\b/i, /\bweek\s*plan/i, /\bday\s*by\s*day/i] },
+  { value: 'scrum',         patterns: [/\bscrum\b/i, /\bsprint\b/i, /\bproduct\s*backlog\b/i] },
+  { value: 'cybersecurity', patterns: [/\bcyber\s*security\b/i, /\bcybersec\b/i, /\bsecurity\s*ops\b/i, /\bthreat\b/i, /\bincident\s*response\b/i, /\bsoc\b/i, /\bvulnerabilit/i, /\bpentesting\b/i, /\bhacking\b/i] },
+  { value: 'data-analyst',  patterns: [/\bdata\s*analyst\b/i, /\banalytics\b/i, /\binsight(s)?\b/i, /\bdashboard\b/i] },
+  { value: 'data-engineering', patterns: [/\bdata\s*engineering\b/i, /\betl\b/i, /\bdata\s*pipeline\b/i, /\borchestration\b/i] },
+  { value: 'agile-se',      patterns: [/\bagile\b/i, /\bkanban\b/i] },
+  { value: 'waterfall-se',  patterns: [/\bwaterfall\b/i] },
+  { value: 'sdlc',          patterns: [/\bsdlc\b/i, /\bsoftware\s*dev(?:elopment)?\s*lifecycle\b/i] },
+  { value: 'recurring',     patterns: [/\brecurring\b/i, /\brepeat(?:ing)?\b/i] },
+];
+
+/**
+ * Detects a project type value from a free-text prompt.
+ * Returns null (= standard) if nothing matches.
+ * @param {string} text
+ * @returns {string|null}
+ */
+function _detectProjectTypeFromText(text) {
+  const t = String(text || '');
+  for (const entry of PROJECT_TYPE_KEYWORDS) {
+    if (entry.patterns.some((re) => re.test(t))) return entry.value;
+  }
+  return null;
 }
 
 // ─── AI actions ───────────────────────────────────────────────────────────────
 
 async function _doBoardsMode(text) {
-  const { title, columns } = await generateBoardWithTasks(text);
+  // Detect project type from prompt before calling AI
+  const detectedType = _detectProjectTypeFromText(text);
+
+  const { title, columns } = await generateBoardWithTasks(text, { metered: false });
   _removeThinking();
 
-  // Strip tasks array before saving board structure (columns only)
-  const boardColumns = columns.map(({ tasks: _t, ...col }) => col);
-  const boardId      = await createBoard(_user, title, boardColumns);
+  // If a known project type was detected, use its predefined columns instead
+  let boardColumns;
+  if (detectedType && detectedType !== 'standard') {
+    boardColumns = getDefaultColumnsForProjectType(detectedType);
+  } else {
+    boardColumns = columns.map(({ tasks: _t, ...col }) => col);
+  }
+
+  const boardId = await createBoard(_user, title, boardColumns, null, null, detectedType || 'standard');
 
   // Ensure cards module has the current user before creating cards
   setCurrentUser(_user);
-
-  // Set boardId context so createCard can resolve the board
   setBoardId(boardId);
 
-  // Place generated tasks into their corresponding generated column.
+  // Place generated tasks into their columns
   let totalTasks = 0;
   const orderByColumn = new Map();
   for (let i = 0; i < columns.length; i += 1) {
     const col = columns[i];
     if (!Array.isArray(col.tasks)) continue;
+    // Map original AI column to the new boardColumns best-effort by index
     const targetColumnId = boardColumns[i]?.id || boardColumns[0]?.id;
     if (!targetColumnId) continue;
     for (const t of col.tasks) {
@@ -316,14 +465,16 @@ async function _doBoardsMode(text) {
     }
   }
 
-  const colCount = columns.length;
+  const typeLabel = PROJECT_TYPES.find((pt) => pt.value === detectedType)?.label || '';
+  const typeSuffix = typeLabel ? ` (${typeLabel} type)` : '';
+  const colCount = boardColumns.length;
   _addToHistory(
     'assistant',
-    `I created "${title}" with ${colCount} card${colCount !== 1 ? 's' : ''} and ${totalTasks} task${totalTasks !== 1 ? 's' : ''}! Opening it now…`,
+    `I created "${title}"${typeSuffix} with ${colCount} column${colCount !== 1 ? 's' : ''} and ${totalTasks} task${totalTasks !== 1 ? 's' : ''}! Opening it now…`,
   );
 
   if (_onBoardCreated) {
-    _onBoardCreated(boardId, { id: boardId, title, columns: boardColumns });
+    _onBoardCreated(boardId, { id: boardId, title, columns: boardColumns, projectType: detectedType || 'standard' });
   }
 }
 
@@ -351,7 +502,7 @@ async function _doBoardMode(text) {
   }
 
   // Generate a new task suggestion, then place it by prompt intent.
-  const { title, description } = await generateCard(text);
+  const { title, description } = await generateCard(text, { metered: false });
   _removeThinking();
 
   const columns = _getVisibleColumns();
@@ -381,6 +532,51 @@ async function _doBoardMode(text) {
   const order = listEl?.children.length ?? 0;
   await createCard(target.id, title, description, order);
   _addToHistory('assistant', `Added "${title}" to ${target.label}.`);
+}
+
+async function _doDashboardMode(text) {
+  _removeThinking();
+
+  const cards = getCardsSnapshot();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const in7 = new Date(today);
+  in7.setDate(in7.getDate() + 7);
+
+  const openCards = cards.filter((c) => !c.completed);
+  const overdue = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') < today);
+  const dueSoon = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') >= today && new Date(c.dueDate + 'T00:00:00') <= in7);
+  const blocked = openCards.filter((c) => /blocked|risk|hold|waiting/i.test(String(c.columnId || '')));
+
+  const topOverdue = [...overdue]
+    .sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))
+    .slice(0, 5)
+    .map((c) => `- ${c.title || 'Untitled'} (${c.dueDate || 'no date'})`)
+    .join('\n');
+
+  const topDueSoon = [...dueSoon]
+    .sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))
+    .slice(0, 5)
+    .map((c) => `- ${c.title || 'Untitled'} (${c.dueDate || 'no date'})`)
+    .join('\n');
+
+  const answer = [
+    'Dashboard Q&A mode is active (answer-only). I will not create tasks from this view.',
+    '',
+    `Your current deck snapshot: ${openCards.length} open, ${overdue.length} overdue, ${dueSoon.length} due in 7 days, ${blocked.length} blocked.`,
+    '',
+    'Recommended next actions:',
+    `1) Triage overdue first: close or re-plan ${overdue.length} items with owners and dates.`,
+    `2) Protect near-term delivery: sequence the ${dueSoon.length} due-soon items by dependency and effort.`,
+    `3) Clear blockers: assign unblock owners for ${blocked.length} blocked/risk tasks.`,
+    '',
+    topOverdue ? `Top overdue:\n${topOverdue}` : 'Top overdue: none',
+    topDueSoon ? `\nTop due soon:\n${topDueSoon}` : '\nTop due soon: none',
+    '',
+    `Question asked: "${text}"`,
+  ].join('\n');
+
+  _addToHistory('assistant', answer);
 }
 
 function _getVisibleColumns() {
