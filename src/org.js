@@ -38,6 +38,7 @@ export async function createOrg(uid, name) {
     name:      name.trim(),
     ownerId:   uid,
     members:   [uid],
+    admins:    [uid],
     createdAt: serverTimestamp(),
   });
   await updateDoc(doc(db, 'users', uid), {
@@ -114,4 +115,34 @@ export async function removeMember(orgId, uid) {
   await updateDoc(doc(db, 'users', uid), {
     organizationId: null,
   });
+}
+
+// ─── Organization admins ──────────────────────────────────────────────────────
+
+/**
+ * Sets or removes admin status for a member of the org.
+ * @param {string} orgId
+ * @param {string} uid
+ * @param {boolean} isAdmin
+ */
+export async function setOrgMemberAdminStatus(orgId, uid, isAdmin) {
+  const org = await getOrgById(orgId);
+  if (!org) throw new Error('Organization not found.');
+  
+  const admins = Array.isArray(org.admins) ? org.admins : [];
+  const updatedAdmins = isAdmin
+    ? [...new Set([...admins, uid])]
+    : admins.filter((id) => id !== uid);
+  
+  await updateDoc(doc(db, 'organizations', orgId), { admins: updatedAdmins });
+}
+
+/**
+ * Fetches all organizations.
+ * @returns {Promise<object[]>}
+ */
+export async function getAllOrganizations() {
+  const { getDocs, collection } = await import('firebase/firestore');
+  const snap = await getDocs(collection(db, 'organizations'));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }

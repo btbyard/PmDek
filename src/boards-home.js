@@ -12,7 +12,7 @@ import { generateBoard, generateBoardWithTasks }            from './ai.js';
 import { createCard, updateAllCardsBackground, setCurrentUser } from './cards.js';
 import { getUserProfile }                                   from './users.js';
 import { getOrgMembers }                                    from './org.js';
-import { getUserPlan }                                       from './billing.js';
+import { getUserPlan, BILLING_PLANS }                       from './billing.js';
 
 // Store the refresh callback so the rename modal can refresh the grid after saving.
 let _onBoardOpen = null;
@@ -98,12 +98,23 @@ export async function openCreateBoardModal(user, onCreated) {
   }).join('');
   const defaultColorVal = DEFAULT_COLOR;
   const plan = await getUserPlan(user.uid);
-  const allowedTypes = plan.allowedProjectTypes === 'all'
-    ? PROJECT_TYPES
-    : PROJECT_TYPES.filter((opt) => plan.allowedProjectTypes.includes(opt.value));
-  const projectTypeOptionsHtml = allowedTypes.map((opt) => `
-    <option value="${opt.value}" ${opt.value === 'standard' ? 'selected' : ''}>${opt.label}</option>
-  `).join('');
+  
+  // Helper: determine if a project type is premium
+  const freePlanTypes = BILLING_PLANS.free.allowedProjectTypes;
+  const isPremiumType = (typeValue) => !freePlanTypes.includes(typeValue);
+  const canUseAnyType = plan.allowedProjectTypes === 'all';
+  
+  // Always show all project types, but mark premium ones
+  const projectTypeOptionsHtml = PROJECT_TYPES.map((opt) => {
+    const isPremium = isPremiumType(opt.value);
+    const isLocked = isPremium && !canUseAnyType;
+    const selected = opt.value === 'standard';
+    return `
+      <option value="${opt.value}" ${selected ? 'selected' : ''} data-is-locked="${isLocked}" data-is-premium="${isPremium}">
+        ${opt.label}${isPremium ? ' (Premium)' : ''}
+      </option>
+    `;
+  }).join('');
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -117,10 +128,34 @@ export async function openCreateBoardModal(user, onCreated) {
             <label class="block text-sm font-medium text-gray-700 mb-1" for="board-project-type-input">
               Project Type
             </label>
-            <select id="board-project-type-input"
-              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
-              ${projectTypeOptionsHtml}
-            </select>
+            <div id="project-type-dropdown-wrapper" class="relative">
+              <button id="board-project-type-btn" type="button"
+                class="w-full rounded-lg border border-gray-300 text-sm text-left px-3 py-2 focus:ring-brand-500 focus:border-brand-500 flex items-center justify-between bg-white hover:bg-gray-50 transition-colors">
+                <span id="project-type-display">Standard</span>
+                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+                </svg>
+              </button>
+              <select id="board-project-type-input" class="hidden" ${projectTypeOptionsHtml}>
+              </select>
+              <div id="project-type-options" class="hidden absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+                ${PROJECT_TYPES.map((opt) => {
+                  const isPremium = isPremiumType(opt.value);
+                  const isLocked = isPremium && !canUseAnyType;
+                  const selected = opt.value === 'standard';
+                  return `
+                    <button type="button" class="project-type-option w-full text-left px-3 py-2.5 hover:bg-gray-100 flex items-center justify-between transition-colors border-b border-gray-100 last:border-0 ${selected ? 'bg-brand-50 text-brand-700' : ''}" 
+                      data-value="${opt.value}" data-is-locked="${isLocked}" data-premium="${isPremium}">
+                      <span class="flex items-center gap-2">
+                        <span>${opt.label}</span>
+                        ${isPremium ? `<span class="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800">Premium</span>` : ''}
+                      </span>
+                      ${isLocked ? `<span class="text-amber-600">🔒</span>` : ''}
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
           </div>
           ${userOrgId ? `
           <div>
@@ -183,6 +218,53 @@ export async function openCreateBoardModal(user, onCreated) {
   const input = document.getElementById('board-title-input');
   input.focus();
 
+  // Project type dropdown handler
+  const projectTypeBtn = document.getElementById('board-project-type-btn');
+  const projectTypeOptions = document.getElementById('project-type-options');
+  const projectTypeDisplay = document.getElementById('project-type-display');
+  const projectTypeInput = document.getElementById('board-project-type-input');
+  const projectTypeSelect = document.getElementById('board-project-type-input');
+
+  projectTypeBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    projectTypeOptions.classList.toggle('hidden');
+  });
+
+  projectTypeOptions.querySelectorAll('.project-type-option').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const value = btn.dataset.value;
+      const isLocked = btn.dataset.isLocked === 'true';
+      
+      // If locked (premium on free tier), show upgrade prompt instead of selecting
+      if (isLocked) {
+        projectTypeOptions.classList.add('hidden');
+        _showUpgradePromptForPremiumType(PROJECT_TYPES.find((p) => p.value === value)?.label || value);
+        return;
+      }
+      
+      // Update selection
+      projectTypeSelect.value = value;
+      const label = PROJECT_TYPES.find((p) => p.value === value)?.label || value;
+      projectTypeDisplay.textContent = label;
+      
+      // Update button styling
+      document.querySelectorAll('.project-type-option').forEach((b) => {
+        b.classList.remove('bg-brand-50', 'text-brand-700');
+      });
+      btn.classList.add('bg-brand-50', 'text-brand-700');
+      
+      projectTypeOptions.classList.add('hidden');
+    });
+  });
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#project-type-dropdown-wrapper')) {
+      projectTypeOptions.classList.add('hidden');
+    }
+  });
+
   // Color swatch selection
   document.getElementById('deck-color-swatches').querySelectorAll('.deck-color-swatch').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -219,6 +301,17 @@ export async function openCreateBoardModal(user, onCreated) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (_submitting) return;
+    
+    const selectedType = document.getElementById('board-project-type-input')?.value || 'standard';
+    const isPremium = isPremiumType(selectedType);
+    const isLocked = isPremium && !canUseAnyType;
+    
+    // Check if trying to use a locked premium type
+    if (isLocked) {
+      _showUpgradePromptForPremiumType(PROJECT_TYPES.find((p) => p.value === selectedType)?.label || selectedType);
+      return;
+    }
+    
     _submitting = true;
     const submitBtn = form.querySelector('[type="submit"]');
     if (submitBtn) submitBtn.disabled = true;
@@ -973,6 +1066,63 @@ function _openChangeDeckColorModal(board) {
         console.error('Change deck color failed:', err);
       }
     });
+  });
+}
+
+// ─── Premium type upgrade prompt ──────────────────────────────────────────────
+
+function _showUpgradePromptForPremiumType(typeName) {
+  const modalRoot = document.getElementById('modal-root');
+  
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+        <div class="flex items-start gap-3 mb-4">
+          <div class="flex-shrink-0 w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+            <span class="text-lg">🔒</span>
+          </div>
+          <div>
+            <h3 class="text-lg font-semibold text-gray-800">Upgrade to use ${typeName}</h3>
+            <p class="mt-1 text-sm text-gray-600">
+              The <strong>${typeName}</strong> project type is available on premium plans.
+            </p>
+          </div>
+        </div>
+        <div class="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p class="text-sm text-amber-900"><strong>Premium Features:</strong></p>
+          <ul class="mt-2 space-y-1 text-xs text-amber-800">
+            <li>✓ All advanced project types (Scrum, Waterfall, Agile, SDLC, etc.)</li>
+            <li>✓ Up to 75 decks (vs 10 on free)</li>
+            <li>✓ 40 AI requests/day (vs 2 on free)</li>
+            <li>✓ Team collaboration with organizations</li>
+          </ul>
+        </div>
+        <div class="flex justify-between gap-2">
+          <button id="upgrade-modal-cancel"
+            class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
+            Cancel
+          </button>
+          <button id="upgrade-modal-upgrade"
+            class="gold-btn px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">
+            View Plans
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('upgrade-modal-cancel').addEventListener('click', close);
+  document.getElementById('upgrade-modal-upgrade').addEventListener('click', async () => {
+    close();
+    // Dynamically import main.js to access the billing modal
+    const mainModule = await import('./main.js');
+    if (mainModule._openBillingModal) {
+      mainModule._openBillingModal();
+    }
+  });
+  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
   });
 }
 

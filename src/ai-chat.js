@@ -538,43 +538,108 @@ async function _doDashboardMode(text) {
   _removeThinking();
 
   const cards = getCardsSnapshot();
+  const q = _normalize(text);
+  const isEffectivelyCompleted = (c) => Boolean(c?.completed) || /\bdone\b|\bfinish(?:ed)?\b|\bcomplete(?:d)?\b|\bdeployment\b|\bresolved\b/i.test(String(c?.columnId || ''));
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const in7 = new Date(today);
   in7.setDate(in7.getDate() + 7);
+  const in14 = new Date(today);
+  in14.setDate(in14.getDate() + 14);
 
-  const openCards = cards.filter((c) => !c.completed);
+  const openCards = cards.filter((c) => !isEffectivelyCompleted(c));
   const overdue = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') < today);
   const dueSoon = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') >= today && new Date(c.dueDate + 'T00:00:00') <= in7);
   const blocked = openCards.filter((c) => /blocked|risk|hold|waiting/i.test(String(c.columnId || '')));
+  const due14 = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') <= in14);
+  const undated = openCards.filter((c) => !c.dueDate);
 
-  const topOverdue = [...overdue]
-    .sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))
-    .slice(0, 5)
-    .map((c) => `- ${c.title || 'Untitled'} (${c.dueDate || 'no date'})`)
+  const fmt = (arr, max = 6) => arr
+    .slice(0, max)
+    .map((c) => `- ${c.title || 'Untitled'}${c.dueDate ? ` (${c.dueDate})` : ''}`)
     .join('\n');
 
-  const topDueSoon = [...dueSoon]
-    .sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))
-    .slice(0, 5)
-    .map((c) => `- ${c.title || 'Untitled'} (${c.dueDate || 'no date'})`)
-    .join('\n');
+  let answer = '';
 
-  const answer = [
-    'Dashboard Q&A mode is active (answer-only). I will not create tasks from this view.',
-    '',
-    `Your current deck snapshot: ${openCards.length} open, ${overdue.length} overdue, ${dueSoon.length} due in 7 days, ${blocked.length} blocked.`,
-    '',
-    'Recommended next actions:',
-    `1) Triage overdue first: close or re-plan ${overdue.length} items with owners and dates.`,
-    `2) Protect near-term delivery: sequence the ${dueSoon.length} due-soon items by dependency and effort.`,
-    `3) Clear blockers: assign unblock owners for ${blocked.length} blocked/risk tasks.`,
-    '',
-    topOverdue ? `Top overdue:\n${topOverdue}` : 'Top overdue: none',
-    topDueSoon ? `\nTop due soon:\n${topDueSoon}` : '\nTop due soon: none',
-    '',
-    `Question asked: "${text}"`,
-  ].join('\n');
+  if (/overdue|recover|recovery/.test(q)) {
+    const focus = [...overdue]
+      .sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))
+      .slice(0, 3);
+    const nextWorkday = new Date(today);
+    nextWorkday.setDate(nextWorkday.getDate() + 1);
+    const nextWorkdayKey = nextWorkday.toISOString().slice(0, 10);
+
+    const concreteSteps = focus.flatMap((task, i) => {
+      const taskName = task.title || 'Untitled';
+      const oldDue = task.dueDate || 'no date';
+      return [
+        `${i + 1}. ${taskName}: set owner + priority now (critical if blocking others).`,
+        `${i + 1}. ${taskName}: split into 2-3 smaller deliverables with clear done criteria.`,
+        `${i + 1}. ${taskName}: update due date from ${oldDue} to ${nextWorkdayKey} or add a blocker reason.`,
+      ];
+    });
+
+    answer = [
+      'Dashboard Q&A mode is active (answer-only).',
+      '',
+      `Recommendation explained: overdue tasks are late commitments and should be stabilized before new work.`,
+      '',
+      `Overdue now (${overdue.length}):`,
+      overdue.length ? fmt([...overdue].sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))) : '- None overdue right now',
+      '',
+      'Exact next actions:',
+      concreteSteps.length ? concreteSteps.join('\n') : '1. No overdue tasks to recover right now.',
+      '',
+      'Definition of done for recovery:',
+      '- each overdue task has owner, updated due date, and next concrete step.',
+      '- no overdue task remains without status update by end of day.',
+    ].join('\n');
+  } else if (/prioriti|rank|risk|urgency|due date/.test(q)) {
+    const ranked = [...overdue, ...dueSoon]
+      .sort((a, b) => {
+        const aDue = a.dueDate ? new Date(a.dueDate + 'T00:00:00').getTime() : Number.MAX_SAFE_INTEGER;
+        const bDue = b.dueDate ? new Date(b.dueDate + 'T00:00:00').getTime() : Number.MAX_SAFE_INTEGER;
+        return aDue - bDue;
+      });
+    answer = [
+      'Dashboard Q&A mode is active (answer-only).',
+      '',
+      'Priority order by deadline pressure (overdue first):',
+      ranked.length ? fmt(ranked) : '- No overdue or due-soon tasks found',
+      '',
+      'Reasoning: overdue tasks carry immediate schedule risk; nearest due dates come next.',
+    ].join('\n');
+  } else if (/block|mitigation|unblock/.test(q)) {
+    answer = [
+      'Dashboard Q&A mode is active (answer-only).',
+      '',
+      `Blocked/risk tasks to mitigate (${blocked.length}):`,
+      blocked.length ? fmt(blocked) : '- No blocked tasks currently flagged',
+      '',
+      'Mitigation checklist: assign owner, define unblock dependency, set decision deadline, and add fallback path.',
+    ].join('\n');
+  } else if (/sprint|14|two week|plan/.test(q)) {
+    answer = [
+      'Dashboard Q&A mode is active (answer-only).',
+      '',
+      `14-day execution candidates (${due14.length} due within 14 days):`,
+      due14.length ? fmt([...due14].sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))) : '- No dated tasks in the next 14 days',
+      '',
+      undated.length ? `Also schedule these undated open tasks:\n${fmt(undated, 4)}` : 'No undated open tasks to schedule.',
+    ].join('\n');
+  } else {
+    answer = [
+      'Dashboard Q&A mode is active (answer-only).',
+      '',
+      `Current snapshot: ${openCards.length} open, ${overdue.length} overdue, ${dueSoon.length} due in 7 days, ${blocked.length} blocked.`,
+      '',
+      overdue.length ? `Overdue tasks:\n${fmt(overdue, 5)}` : 'Overdue tasks: none',
+      dueSoon.length ? `\nDue-soon tasks:\n${fmt(dueSoon, 5)}` : '\nDue-soon tasks: none',
+      blocked.length ? `\nBlocked tasks:\n${fmt(blocked, 5)}` : '\nBlocked tasks: none',
+      '',
+      `Question asked: "${text}"`,
+    ].join('\n');
+  }
 
   _addToHistory('assistant', answer);
 }

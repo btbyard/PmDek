@@ -48,6 +48,14 @@ let _filterQuery = '';
 /** Active chip filters: set of 'overdue' | 'today' | 'recurring' */
 let _filterChips = new Set();
 
+function _isDoneLikeColumnId(columnId) {
+  return /\bdone\b|\bfinish(?:ed)?\b|\bcomplete(?:d)?\b|\bdeployment\b|\bresolved\b/i.test(String(columnId || ''));
+}
+
+function _isEffectivelyCompleted(card) {
+  return Boolean(card?.completed) || _isDoneLikeColumnId(card?.columnId);
+}
+
 /**
  * Starts a real-time listener on the cards collection for the active board.
  * Fires `renderCards` every time Firestore pushes an update.
@@ -118,13 +126,13 @@ function _applyActiveFilters(cards) {
   }
   if (_filterChips.has('overdue')) {
     visible = visible.filter((c) => {
-      if (!c.dueDate || c.completed) return false;
+      if (!c.dueDate || _isEffectivelyCompleted(c)) return false;
       return new Date(c.dueDate + 'T00:00:00') < today;
     });
   }
   if (_filterChips.has('today')) {
     visible = visible.filter((c) => {
-      if (!c.dueDate || c.completed) return false;
+      if (!c.dueDate || _isEffectivelyCompleted(c)) return false;
       return new Date(c.dueDate + 'T00:00:00').getTime() === today.getTime();
     });
   }
@@ -143,14 +151,30 @@ export function renderListView() {
   }
 
   const sortByDueDate = (a, b) => String(a.dueDate || '9999-12-31').localeCompare(String(b.dueDate || '9999-12-31'));
-  const openCards = cards.filter((c) => !c.completed).sort(sortByDueDate);
-  const doneCards = cards.filter((c) => c.completed).sort(sortByDueDate);
+  const openCards = cards.filter((c) => !_isEffectivelyCompleted(c)).sort(sortByDueDate);
+  const doneCards = cards.filter((c) => _isEffectivelyCompleted(c)).sort(sortByDueDate);
+
+  const subtaskListHtml = (card, muted = false) => {
+    const subtasks = Array.isArray(card.subtasks) ? card.subtasks : [];
+    if (!subtasks.length) return '';
+    return `
+      <div class="mt-1.5 pl-3 border-l border-gray-200 space-y-0.5">
+        ${subtasks.map((s) => `
+          <label class="flex items-center gap-1.5 text-[11px] ${muted ? 'text-gray-400' : 'text-gray-500'} ${s.completed ? 'line-through' : ''}">
+            <input type="checkbox" class="list-subtask-check w-3.5 h-3.5 rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+              data-card-id="${escapeHtml(card.id || '')}" data-subtask-id="${escapeHtml(s.id || '')}" ${s.completed ? 'checked' : ''} />
+            <span>${escapeHtml(s.title || '')}</span>
+          </label>
+        `).join('')}
+      </div>`;
+  };
 
   listRoot.innerHTML = `
     <div class="rounded-xl border border-gray-200 overflow-hidden bg-white">
       <table class="w-full text-sm">
         <thead class="bg-gray-50 text-gray-600">
           <tr>
+            <th class="text-left px-3 py-2 w-10"></th>
             <th class="text-left px-3 py-2">Task</th>
             <th class="text-left px-3 py-2">Column</th>
             <th class="text-left px-3 py-2">Due</th>
@@ -160,20 +184,32 @@ export function renderListView() {
         <tbody>
           ${openCards.map((c) => `
             <tr class="border-t border-gray-100">
-              <td class="px-3 py-2 text-gray-800">${escapeHtml(c.title || '')}</td>
+              <td class="px-3 py-2 align-top">
+                <input type="checkbox" class="list-task-check mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400" data-card-id="${escapeHtml(c.id || '')}" ${c.completed ? 'checked' : ''} />
+              </td>
+              <td class="px-3 py-2 text-gray-800">
+                <p>${escapeHtml(c.title || '')}</p>
+                ${subtaskListHtml(c, false)}
+              </td>
               <td class="px-3 py-2 text-gray-500">${escapeHtml(c.columnId || '')}</td>
               <td class="px-3 py-2 text-gray-500">${escapeHtml(c.dueDate || 'No due date')}</td>
-              <td class="px-3 py-2">${c.completed ? '<span class="text-emerald-600">Done</span>' : '<span class="text-amber-600">Open</span>'}</td>
+              <td class="px-3 py-2">${_isEffectivelyCompleted(c) ? '<span class="text-emerald-600">Done</span>' : '<span class="text-amber-600">Open</span>'}</td>
             </tr>
           `).join('')}
           ${doneCards.length ? `
             <tr class="border-t border-gray-200 bg-gray-50/70">
-              <td class="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500" colspan="4">Completed</td>
+              <td class="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500" colspan="5">Completed</td>
             </tr>
           ` : ''}
           ${doneCards.map((c) => `
             <tr class="border-t border-gray-100 bg-gray-50/40">
-              <td class="px-3 py-2 text-gray-500 line-through">${escapeHtml(c.title || '')}</td>
+              <td class="px-3 py-2 align-top">
+                <input type="checkbox" class="list-task-check mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400" data-card-id="${escapeHtml(c.id || '')}" checked />
+              </td>
+              <td class="px-3 py-2 text-gray-500">
+                <p class="line-through">${escapeHtml(c.title || '')}</p>
+                ${subtaskListHtml(c, true)}
+              </td>
               <td class="px-3 py-2 text-gray-400">${escapeHtml(c.columnId || '')}</td>
               <td class="px-3 py-2 text-gray-400">${escapeHtml(c.dueDate || 'No due date')}</td>
               <td class="px-3 py-2"><span class="text-emerald-600">Done</span></td>
@@ -182,6 +218,52 @@ export function renderListView() {
         </tbody>
       </table>
     </div>`;
+
+  if (!listRoot.dataset.eventsBound) {
+    listRoot.dataset.eventsBound = '1';
+    listRoot.addEventListener('change', async (e) => {
+      const chk = e.target.closest('.list-task-check');
+      if (chk) {
+        const cardId = chk.dataset.cardId;
+        if (!cardId) return;
+        const checked = Boolean(chk.checked);
+        const card = _lastCards.find((c) => c.id === cardId);
+        const cardEl = document.querySelector(`.card[data-card-id="${cardId}"]`);
+        try {
+          await _applyTaskCompletionToggle(cardId, checked, cardEl, card?.title || '');
+        } catch (err) {
+          console.error('List task toggle failed:', err);
+        }
+        return;
+      }
+
+      const subChk = e.target.closest('.list-subtask-check');
+      if (subChk) {
+        const cardId = subChk.dataset.cardId;
+        const subId = subChk.dataset.subtaskId;
+        if (!cardId || !subId) return;
+
+        const checked = Boolean(subChk.checked);
+        const card = _lastCards.find((c) => c.id === cardId);
+        if (!card) return;
+
+        const subtasks = Array.isArray(card.subtasks) ? card.subtasks : [];
+        const nextSubtasks = subtasks.map((s) => (
+          s.id === subId ? { ...s, completed: checked } : s
+        ));
+
+        try {
+          await updateCard(cardId, { subtasks: nextSubtasks });
+          if (checked) {
+            const doneSub = subtasks.find((s) => s.id === subId);
+            _logCompletion(cardId, card.title || '', 'subtask', { subtaskTitle: doneSub?.title || '' });
+          }
+        } catch (err) {
+          console.error('List subtask toggle failed:', err);
+        }
+      }
+    });
+  }
 }
 
 export function renderCalendarView() {
@@ -235,7 +317,7 @@ export function renderCalendarView() {
  * @param {number} [order=0]
  * @returns {Promise<string>} New card document ID
  */
-export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null, recurring = false, recurrenceFrequency = null) {
+export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null, recurring = false, recurrenceFrequency = null, startDate = null) {
   const boardId = getBoardId();
   const ref = await addDoc(collection(db, 'cards'), {
     boardId,
@@ -246,6 +328,7 @@ export async function createCard(columnId, title, description = '', order = 0, c
     completed:   false,
     checkable,
     subtasks:    subtasks,
+    startDate:   startDate || null,
     dueDate:     dueDate || null,
     recurring:   Boolean(recurring),
     recurrenceFrequency: recurring ? (recurrenceFrequency || 'weekly') : null,
@@ -403,7 +486,7 @@ function renderAllCards(cards) {
  */
 function buildCardEl(card, isDoneColumn = false) {
   const el = document.createElement('div');
-  const isCompleted = Boolean(card.completed);
+  const isCompleted = Boolean(card.completed) || isDoneColumn;
   const subtasks = Array.isArray(card.subtasks) ? card.subtasks : [];
   const attachments = Array.isArray(card.attachments) ? card.attachments : [];
   const dueDate = card.dueDate || null;
@@ -641,18 +724,9 @@ export function initCardEvents(user) {
     const taskCheck = e.target.closest('.task-check');
     if (taskCheck) {
       const isCompleted = Boolean(taskCheck.checked);
-      await updateCard(taskCheck.dataset.cardId, { completed: isCompleted });
       const cardEl = taskCheck.closest('.card');
-      if (isCompleted) {
-        const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
-        _logCompletion(taskCheck.dataset.cardId, cardTitle, 'task');
-        // Recurring automation: clone card into first column with next due date
-        if (cardEl?.dataset.recurring === 'true') {
-          _handleRecurringComplete(taskCheck.dataset.cardId, cardEl).catch((err) =>
-            console.warn('Recurring clone failed:', err)
-          );
-        }
-      }
+      const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
+      await _applyTaskCompletionToggle(taskCheck.dataset.cardId, isCompleted, cardEl, cardTitle);
       return;
     }
 
@@ -804,6 +878,7 @@ export function initCardEvents(user) {
         description: cardEl.querySelector('.card-desc')?.textContent || '',
         checkable,
         subtasks,
+        startDate:   fullCard.startDate || null,
         dueDate:     cardEl.dataset.dueDate || null,
         recurring,
         recurrenceFrequency,
@@ -846,6 +921,23 @@ export function initCardEvents(user) {
       return;
     }
   });
+}
+
+async function _applyTaskCompletionToggle(cardId, isCompleted, cardEl = null, fallbackTitle = '') {
+  await updateCard(cardId, { completed: isCompleted });
+  if (!isCompleted) return;
+
+  const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim()
+    || fallbackTitle
+    || '';
+  _logCompletion(cardId, cardTitle, 'task');
+
+  // Recurring automation: clone card into first column with next due date
+  if (cardEl?.dataset?.recurring === 'true') {
+    _handleRecurringComplete(cardId, cardEl).catch((err) =>
+      console.warn('Recurring clone failed:', err)
+    );
+  }
 }
 
 /**
@@ -1156,7 +1248,7 @@ async function _uploadAttachments(files, userId) {
  *
  * @param {{ columnId?: string, cardId?: string, title?: string, description?: string }} opts
  */
-function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], dueDate = null, recurring = false, recurrenceFrequency = 'weekly', attachments = [], comments = [], assignees = [] }) {
+function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], startDate = null, dueDate = null, recurring = false, recurrenceFrequency = 'weekly', attachments = [], comments = [], assignees = [] }) {
   const modalRoot = document.getElementById('modal-root');
   const isEdit    = Boolean(cardId);
 
@@ -1464,6 +1556,15 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
             >${escapeHtml(description)}</textarea>
           </div>
           <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="card-start-date">Start date <span class="text-gray-400 font-normal">(optional)</span></label>
+            <input
+              id="card-start-date"
+              type="date"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500"
+              value="${startDate || ''}"
+            />
+          </div>
+          <div>
             <label class="block text-sm font-medium text-gray-700 mb-1" for="card-due-date">Due date <span class="text-gray-400 font-normal">(optional)</span></label>
             <input
               id="card-due-date"
@@ -1555,6 +1656,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     const newTitle     = input.value.trim();
     const newDesc      = document.getElementById('card-desc').value.trim();
     const newCheckable = document.getElementById('card-checkable').checked;
+    const newStartDate = document.getElementById('card-start-date').value || null;
     const newDueDate   = document.getElementById('card-due-date').value || null;
     const newRecurring = Boolean(document.getElementById('card-recurring')?.checked);
     const newRecurrenceFrequency = newRecurring
@@ -1578,7 +1680,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
         const finalSubtasks = editSubtasks.filter((s) => s.title.trim() !== '');
         await updateCard(cardId, {
           title: newTitle, description: newDesc, checkable: newCheckable,
-          subtasks: finalSubtasks, dueDate: newDueDate, attachments: finalAttachments,
+          subtasks: finalSubtasks, startDate: newStartDate, dueDate: newDueDate, attachments: finalAttachments,
           recurring: newRecurring,
           recurrenceFrequency: newRecurrenceFrequency,
             assignees: [...editAssignees],
@@ -1586,7 +1688,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
       } else {
         const listEl    = document.querySelector(`.card-list[data-column-id="${columnId}"]`);
         const lastOrder = listEl?.children.length ?? 0;
-        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, null, null, newRecurring, newRecurrenceFrequency);
+        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, null, null, newRecurring, newRecurrenceFrequency, newStartDate);
       }
       close();
     } catch (err) {

@@ -25,8 +25,8 @@ import { renderBoardsHome, openCreateBoardModal }                 from './boards
 import { initAiChat, setAiChatMode, toggleAiChat, openAiChatWithPrompt, collapseAiChat } from './ai-chat.js';
 import { doc, getDoc }                                             from 'firebase/firestore';
 import { db }                                                      from './firebase.js';
-import { ensureUserProfile, claimUsername, validateUsername, checkUsernameAvailable, updateUserDisplayName, getUserProfile } from './users.js';
-import { createOrg, getOrgById, getOrgMembers, addMemberByUsername, removeMember } from './org.js';
+import { ensureUserProfile, claimUsername, validateUsername, checkUsernameAvailable, updateUserDisplayName, getUserProfile, getAllUsers, setUserAdminStatus } from './users.js';
+import { createOrg, getOrgById, getOrgMembers, addMemberByUsername, removeMember, setOrgMemberAdminStatus, getAllOrganizations } from './org.js';
 import { BILLING_PLANS, getUserPlan, ensureBillingDefaults }      from './billing.js';
 import { httpsCallable }                                           from 'firebase/functions';
 import { functions }                                               from './firebase.js';
@@ -210,14 +210,15 @@ function _renderAiDashboardPage() {
   const cards = getCardsSnapshot();
   const root = document.getElementById('ai-dashboard-root');
   if (!root) return;
+  const isEffectivelyCompleted = (c) => Boolean(c?.completed) || /\bdone\b|\bfinish(?:ed)?\b|\bcomplete(?:d)?\b|\bdeployment\b|\bresolved\b/i.test(String(c?.columnId || ''));
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const in7 = new Date(today); in7.setDate(in7.getDate() + 7);
   const in14 = new Date(today); in14.setDate(in14.getDate() + 14);
 
   const total = cards.length;
-  const doneCards = cards.filter((c) => c.completed);
-  const openCards = cards.filter((c) => !c.completed);
+  const doneCards = cards.filter((c) => isEffectivelyCompleted(c));
+  const openCards = cards.filter((c) => !isEffectivelyCompleted(c));
   const done = doneCards.length;
   const overdue = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') < today);
   const dueSoon = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') >= today && new Date(c.dueDate + 'T00:00:00') <= in7);
@@ -242,8 +243,8 @@ function _renderAiDashboardPage() {
     assignees.forEach((uid) => {
       const key = uid || 'Unassigned';
       const prev = workloadMap.get(key) || { tasks: 0, overdue: 0, dueSoon: 0 };
-      prev.tasks += c.completed ? 0 : 1;
-      if (!c.completed && c.dueDate) {
+      prev.tasks += isEffectivelyCompleted(c) ? 0 : 1;
+      if (!isEffectivelyCompleted(c) && c.dueDate) {
         const due = new Date(c.dueDate + 'T00:00:00');
         if (due < today) prev.overdue += 1;
         if (due >= today && due <= in7) prev.dueSoon += 1;
@@ -286,11 +287,28 @@ function _renderAiDashboardPage() {
   if (recurring.length > 0) recs.push(`Batch-plan ${recurring.length} recurring task${recurring.length === 1 ? '' : 's'} for this week.`);
   if (topWorkload[0] && topWorkload[0].tasks >= 5) recs.push(`Redistribute workload from ${_escHtml(topWorkload[0].owner)} to avoid bottlenecks.`);
 
+  const overdueNames = overdue.slice(0, 4).map((c) => c.title || 'Untitled').join(', ');
+  const dueSoonNames = dueSoon.slice(0, 5).map((c) => `${c.title || 'Untitled'} (${c.dueDate || 'no date'})`).join(', ');
+  const blockedNames = blocked.slice(0, 4).map((c) => c.title || 'Untitled').join(', ');
+  const sprintNames = openCards
+    .filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') <= in14)
+    .slice(0, 6)
+    .map((c) => `${c.title || 'Untitled'} (${c.dueDate || 'no date'})`)
+    .join(', ');
+
   const quickPrompts = [
-    'Suggest a 3-day recovery plan for overdue tasks in this deck.',
-    'Prioritize my tasks by risk and due date and explain why.',
-    'Identify blockers and propose mitigation steps.',
-    'Create a sprint plan from open tasks due in 14 days.',
+    overdue.length
+      ? `Build a 3-day recovery plan for these overdue tasks: ${overdueNames}.`
+      : 'No tasks are overdue. What should I improve next for schedule risk?',
+    dueSoon.length
+      ? `Rank these due-soon tasks by risk and urgency, and explain why: ${dueSoonNames}.`
+      : 'No tasks are due in the next 7 days. What should I pull forward?',
+    blocked.length
+      ? `Give mitigation steps for these blocked tasks: ${blockedNames}.`
+      : 'No blocked tasks found. What are likely hidden blockers to check?',
+    sprintNames
+      ? `Create a 14-day execution plan for: ${sprintNames}.`
+      : 'Create a 14-day sprint plan for the highest-value open tasks in this deck.',
   ];
 
   const healthTone = healthScore >= 80 ? 'text-emerald-600' : healthScore >= 60 ? 'text-amber-600' : 'text-rose-600';
@@ -684,9 +702,11 @@ async function _renderTimelineInPage() {
 
   const rows = datedCards.map((c) => {
     const due = new Date(`${c.dueDate}T00:00:00`);
+    const startField = c.startDate ? new Date(`${c.startDate}T00:00:00`) : null;
     const created = c.createdAt?.toDate?.() || null;
-    const start = created && created <= due
-      ? new Date(created.getFullYear(), created.getMonth(), created.getDate())
+    const startSource = startField || created;
+    const start = startSource && startSource <= due
+      ? new Date(startSource.getFullYear(), startSource.getMonth(), startSource.getDate())
       : new Date(due.getFullYear(), due.getMonth(), Math.max(1, due.getDate() - 2));
 
     const subtasks = Array.isArray(c.subtasks) ? c.subtasks : [];
@@ -704,6 +724,7 @@ async function _renderTimelineInPage() {
       end: due,
       progress,
       completed: Boolean(c.completed),
+      startDate: c.startDate || null,
       dueDate: c.dueDate,
     };
   }).sort((a, b) => a.end - b.end);
@@ -736,7 +757,7 @@ async function _renderTimelineInPage() {
       <div class="grid grid-cols-[220px_1fr] gap-3 items-center py-2 border-b border-gray-100 last:border-0">
         <div class="min-w-0">
           <p class="text-sm font-medium text-gray-800 truncate">${_escHtml(r.title)}</p>
-          <p class="text-[11px] text-gray-500">Due ${_escHtml(r.dueDate)} • ${statusText}</p>
+          <p class="text-[11px] text-gray-500">${_escHtml(r.startDate || 'Auto')} → ${_escHtml(r.dueDate)} • ${statusText}</p>
         </div>
         <div class="relative h-7 rounded bg-gray-100 overflow-hidden">
           <div class="absolute inset-y-1 rounded bg-gradient-to-r ${barClass}" style="left:${leftPct}%;width:${widthPct}%">
@@ -1010,7 +1031,20 @@ function _openAccountMenu(triggerBtn) {
   menu.style.top  = `${rect.bottom + 6}px`;
   menu.style.right = `${window.innerWidth - rect.right}px`;
 
+  const adminButtonHtml = _user?.isAdmin ? `
+    <button data-action="admin-panel"
+      class="w-full text-left px-4 py-2 hover:bg-amber-50 transition-colors flex items-center gap-2 text-amber-700">
+      <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M13 10V3L4 14h7v7l9-11h-7z"/>
+      </svg>
+      Admin Panel
+    </button>
+    <div class="my-1 border-t border-gray-100"></div>
+  ` : '';
+
   menu.innerHTML = `
+    ${adminButtonHtml}
     <button data-action="account-settings"
       class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
       <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1019,6 +1053,14 @@ function _openAccountMenu(triggerBtn) {
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15a3 3 0 100-6 3 3 0 000 6z"/>
       </svg>
       Account settings
+    </button>
+    <button data-action="organizations"
+      class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M17 20h5V10H2v10h5m10 0v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6m10 0H7m3-10V6a2 2 0 114 0v4"/>
+      </svg>
+      Organizations
     </button>
     <button data-action="billing"
       class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
@@ -1067,9 +1109,21 @@ function _openAccountMenu(triggerBtn) {
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
 
+  if (_user?.isAdmin) {
+    menu.querySelector('[data-action="admin-panel"]')?.addEventListener('click', () => {
+      menu.remove();
+      _openAdminPanel();
+    });
+  }
+
   menu.querySelector('[data-action="account-settings"]').addEventListener('click', () => {
     menu.remove();
     _openAccountSettingsModal();
+  });
+
+  menu.querySelector('[data-action="organizations"]').addEventListener('click', () => {
+    menu.remove();
+    _openOrganizationsModal();
   });
 
   menu.querySelector('[data-action="billing"]').addEventListener('click', () => {
@@ -1208,7 +1262,7 @@ function _showSimpleModal(message) {
   document.getElementById('simple-modal-ok').addEventListener('click', () => { modalRoot.innerHTML = ''; });
 }
 
-async function _openBillingModal() {
+export async function _openBillingModal() {
   const modalRoot = document.getElementById('modal-root');
   const plan = await getUserPlan(_user.uid);
 
@@ -1360,21 +1414,6 @@ async function _openUsernamePickerModal() {
 async function _openAccountSettingsModal() {
   const modalRoot = document.getElementById('modal-root');
   _userProfile = await getUserProfile(_user.uid);
-  const org = _userProfile?.organizationId ? await getOrgById(_userProfile.organizationId) : null;
-  const members = org ? await getOrgMembers(org.id) : [];
-  const isOwner = Boolean(org && org.ownerId === _user.uid);
-
-  const memberRows = members.map((m) => {
-    const label = m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`;
-    const removeBtn = isOwner && m.uid !== _user.uid
-      ? `<button type="button" class="org-remove-btn text-xs text-red-600 hover:text-red-700" data-uid="${m.uid}">Remove</button>`
-      : '<span class="text-[10px] text-gray-400">member</span>';
-    return `
-      <div class="flex items-center justify-between py-1.5 border-b border-gray-100 last:border-0">
-        <span class="text-sm text-gray-700">${_escHtml(label)}</span>
-        ${removeBtn}
-      </div>`;
-  }).join('');
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -1399,9 +1438,53 @@ async function _openAccountSettingsModal() {
             </div>
           </div>
         </div>
+      </div>
+    </div>`;
 
-        <div class="space-y-3 pt-4">
-          <h4 class="text-sm font-semibold text-gray-800">Organization</h4>
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('acct-settings-close')?.addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+
+  document.getElementById('acct-display-name-save')?.addEventListener('click', async () => {
+    const value = document.getElementById('acct-display-name')?.value?.trim() || '';
+    if (!value) return;
+    await updateUserDisplayName(_user.uid, value);
+    _userProfile = { ..._userProfile, displayName: value };
+    _updateUserUI({ ..._user, displayName: value });
+    _showSimpleModal('Display name updated.');
+  });
+}
+
+async function _openOrganizationsModal() {
+  const modalRoot = document.getElementById('modal-root');
+  _userProfile = await getUserProfile(_user.uid);
+  const org = _userProfile?.organizationId ? await getOrgById(_userProfile.organizationId) : null;
+  const members = org ? await getOrgMembers(org.id) : [];
+  const isOwner = Boolean(org && org.ownerId === _user.uid);
+
+  const memberRows = members.map((m) => {
+    const label = m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`;
+    const removeBtn = isOwner && m.uid !== _user.uid
+      ? `<button type="button" class="org-remove-btn text-xs text-red-600 hover:text-red-700" data-uid="${m.uid}">Remove</button>`
+      : '<span class="text-[10px] text-gray-400">member</span>';
+    return `
+      <div class="flex items-center justify-between py-1.5 border-b border-gray-100 last:border-0">
+        <span class="text-sm text-gray-700">${_escHtml(label)}</span>
+        ${removeBtn}
+      </div>`;
+  }).join('');
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[88vh] overflow-y-auto p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold text-gray-800">Organizations</h3>
+          <button id="org-settings-close" class="text-gray-400 hover:text-gray-600">✕</button>
+        </div>
+
+        <div class="space-y-3">
           ${org ? `
             <div class="rounded-lg border border-gray-200 p-3">
               <p class="text-sm text-gray-800 font-medium">${_escHtml(org.name || 'Organization')}</p>
@@ -1424,27 +1507,18 @@ async function _openAccountSettingsModal() {
               <button type="submit" class="px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Create</button>
             </form>
           `}
-          <p id="acct-settings-error" class="hidden text-xs text-red-600"></p>
+          <p id="org-settings-error" class="hidden text-xs text-red-600"></p>
         </div>
       </div>
     </div>`;
 
   const close = () => { modalRoot.innerHTML = ''; };
-  document.getElementById('acct-settings-close')?.addEventListener('click', close);
+  document.getElementById('org-settings-close')?.addEventListener('click', close);
   modalRoot.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
     if (e.target === e.currentTarget) close();
   });
 
-  document.getElementById('acct-display-name-save')?.addEventListener('click', async () => {
-    const value = document.getElementById('acct-display-name')?.value?.trim() || '';
-    if (!value) return;
-    await updateUserDisplayName(_user.uid, value);
-    _userProfile = { ..._userProfile, displayName: value };
-    _updateUserUI({ ..._user, displayName: value });
-    _showSimpleModal('Display name updated.');
-  });
-
-  const errorEl = document.getElementById('acct-settings-error');
+  const errorEl = document.getElementById('org-settings-error');
   document.getElementById('org-create-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('org-name-input')?.value?.trim() || '';
@@ -1453,7 +1527,7 @@ async function _openAccountSettingsModal() {
       const plan = await getUserPlan(_user.uid);
       if (!plan.canUseOrg) throw new Error('Organization creation requires Pro or Business tier.');
       await createOrg(_user.uid, name);
-      await _openAccountSettingsModal();
+      await _openOrganizationsModal();
     } catch (err) {
       errorEl.textContent = err.message || 'Could not create organization.';
       errorEl.classList.remove('hidden');
@@ -1471,7 +1545,7 @@ async function _openAccountSettingsModal() {
     }
     try {
       await addMemberByUsername(org.id, username, org.id);
-      await _openAccountSettingsModal();
+      await _openOrganizationsModal();
     } catch (err) {
       errorEl.textContent = err.message || 'Could not add member.';
       errorEl.classList.remove('hidden');
@@ -1482,10 +1556,176 @@ async function _openAccountSettingsModal() {
     btn.addEventListener('click', async () => {
       try {
         await removeMember(org.id, btn.dataset.uid);
-        await _openAccountSettingsModal();
+        await _openOrganizationsModal();
       } catch (err) {
         errorEl.textContent = err.message || 'Could not remove member.';
         errorEl.classList.remove('hidden');
+      }
+    });
+  });
+}
+
+// ─── Admin panel ──────────────────────────────────────────────────────────────
+
+async function _openAdminPanel() {
+  const modalRoot = document.getElementById('modal-root');
+  
+  // Fetch all users and orgs
+  const allUsers = await getAllUsers();
+  const allOrgs = await getAllOrganizations();
+  const { getDocs, collection, query, where } = await import('firebase/firestore');
+  const { db } = await import('./firebase.js');
+  
+  // Fetch all boards to calculate content used
+  const boardsSnap = await getDocs(collection(db, 'boards'));
+  const cardsSnap = await getDocs(collection(db, 'cards'));
+  
+  const stats = {
+    totalUsers: allUsers.length,
+    totalOrgs: allOrgs.length,
+    totalBoards: boardsSnap.size,
+    totalCards: cardsSnap.size,
+  };
+  
+  // Build users table HTML
+  const usersTableHtml = allUsers.map((user) => {
+    const planKey = user.billingPlan || 'free';
+    const isUserAdmin = Boolean(user.isAdmin);
+    return `
+      <tr class="border-b border-gray-200 hover:bg-gray-50">
+        <td class="px-4 py-3 text-sm"><span class="font-medium">${_escHtml(user.displayName || user.username || user.uid)}</span></td>
+        <td class="px-4 py-3 text-sm">${_escHtml(user.email || '—')}</td>
+        <td class="px-4 py-3 text-sm">
+          ${isUserAdmin ? '<span class="px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">✨ Admin</span>' : '<span class="text-gray-500">—</span>'}
+        </td>
+        <td class="px-4 py-3 text-sm">
+          <span class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">${planKey}</span>
+        </td>
+        <td class="px-4 py-3 text-sm">
+          <button class="admin-toggle-user-btn text-xs px-2 py-1 rounded border transition-colors" data-uid="${user.uid}" data-is-admin="${isUserAdmin ? '1' : '0'}"
+            style="color: ${isUserAdmin ? '#dc2626' : '#059669'}; border-color: ${isUserAdmin ? '#dc2626' : '#059669'};">
+            ${isUserAdmin ? 'Remove Admin' : 'Make Admin'}
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  
+  // Build orgs table HTML
+  const orgsTableHtml = allOrgs.map((org) => {
+    const memberCount = Array.isArray(org.members) ? org.members.length : 0;
+    const adminCount = Array.isArray(org.admins) ? org.admins.length : 0;
+    return `
+      <tr class="border-b border-gray-200 hover:bg-gray-50">
+        <td class="px-4 py-3 text-sm"><span class="font-medium">${_escHtml(org.name)}</span></td>
+        <td class="px-4 py-3 text-sm">${memberCount}</td>
+        <td class="px-4 py-3 text-sm">
+          <span class="px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-800">${adminCount}</span>
+        </td>
+        <td class="px-4 py-3 text-sm text-gray-500">${org.id}</td>
+      </tr>
+    `;
+  }).join('');
+  
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-6xl p-6 max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-6">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl">⚡</span>
+            <h2 class="text-2xl font-semibold text-gray-800">Admin Panel</h2>
+          </div>
+          <button id="admin-close" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+        </div>
+        
+        <!-- Stats Row -->
+        <div class="grid grid-cols-4 gap-4 mb-6">
+          <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-blue-50 to-blue-100 p-4">
+            <p class="text-xs text-blue-700 font-semibold">Total Users</p>
+            <p class="mt-2 text-2xl font-bold text-blue-900">${stats.totalUsers}</p>
+          </div>
+          <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-purple-50 to-purple-100 p-4">
+            <p class="text-xs text-purple-700 font-semibold">Organizations</p>
+            <p class="mt-2 text-2xl font-bold text-purple-900">${stats.totalOrgs}</p>
+          </div>
+          <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-green-50 to-green-100 p-4">
+            <p class="text-xs text-green-700 font-semibold">Boards</p>
+            <p class="mt-2 text-2xl font-bold text-green-900">${stats.totalBoards}</p>
+          </div>
+          <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-amber-50 to-amber-100 p-4">
+            <p class="text-xs text-amber-700 font-semibold">Cards</p>
+            <p class="mt-2 text-2xl font-bold text-amber-900">${stats.totalCards}</p>
+          </div>
+        </div>
+        
+        <!-- Users Section -->
+        <div class="mb-8">
+          <h3 class="text-lg font-semibold text-gray-800 mb-3">Users (${stats.totalUsers})</h3>
+          <div class="overflow-x-auto rounded-lg border border-gray-200">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Name</th>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Email</th>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Plan</th>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${usersTableHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <!-- Organizations Section -->
+        <div class="mb-8">
+          <h3 class="text-lg font-semibold text-gray-800 mb-3">Organizations (${stats.totalOrgs})</h3>
+          <div class="overflow-x-auto rounded-lg border border-gray-200">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Org Name</th>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Members</th>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Admins</th>
+                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Org ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${orgsTableHtml}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div class="flex justify-end">
+          <button id="admin-close-btn" class="px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('admin-close').addEventListener('click', close);
+  document.getElementById('admin-close-btn').addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+  
+  // Add event listeners for admin toggle buttons
+  document.querySelectorAll('.admin-toggle-user-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const uid = btn.dataset.uid;
+      const currentIsAdmin = btn.dataset.isAdmin === '1';
+      try {
+        await setUserAdminStatus(uid, !currentIsAdmin);
+        await _openAdminPanel();
+      } catch (err) {
+        console.error('Failed to toggle admin status:', err);
+        alert('Failed to update admin status: ' + (err.message || err));
       }
     });
   });
@@ -1617,4 +1857,25 @@ function _friendlyAuthError(code) {
   };
   return map[code] || 'Sign-in failed. Please try again.';
 }
+
+// ─── Admin setup helper ────────────────────────────────────────────────────────
+// Call from browser console: window.setupAdmin('user@example.com')
+
+window.setupAdmin = async function(email) {
+  if (!email || typeof email !== 'string') {
+    console.error('❌ Usage: window.setupAdmin("user@example.com")');
+    return;
+  }
+  try {
+    const setUserAsAdminFn = httpsCallable(functions, 'setUserAsAdmin');
+    const result = await setUserAsAdminFn({ email });
+    console.log(`✅ Admin setup complete for ${email}`, result.data);
+    return result.data;
+  } catch (err) {
+    console.error('❌ Admin setup failed:', err.message);
+    throw err;
+  }
+};
+
+console.log('💡 Tip: Call window.setupAdmin("email@example.com") from console to make a user an admin.');
 

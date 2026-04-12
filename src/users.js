@@ -57,6 +57,7 @@ export async function ensureUserProfile(user) {
     billingStatus:  'active',
     organizationId: null,
     ownedOrgId:     null,
+    isAdmin:        false,
     createdAt:      serverTimestamp(),
   };
   await setDoc(ref, profile);
@@ -147,4 +148,25 @@ export function validateUsername(value) {
   if (value.length > 20) return 'Username must be 20 characters or fewer.';
   if (!/^[a-z0-9_]+$/.test(value)) return 'Only lowercase letters, numbers, and underscores are allowed.';
   return null;
+}
+
+// ─── Admin functions ──────────────────────────────────────────────────────────
+
+/**
+ * Fetches all users with basic profile info.
+ * @returns {Promise<object[]>}
+ */
+export async function getAllUsers() {
+  const { getDocs, collection, query } = await import('firebase/firestore');
+  const snap = await getDocs(collection(db, 'users'));
+  return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+}
+
+/**
+ * Sets or removes admin status on a user.
+ * @param {string} uid
+ * @param {boolean} isAdmin
+ */
+export async function setUserAdminStatus(uid, isAdmin) {
+  await updateDoc(doc(db, 'users', uid), { isAdmin: Boolean(isAdmin) });
 }

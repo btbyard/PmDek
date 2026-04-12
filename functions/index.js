@@ -340,3 +340,45 @@ exports.createStripeCheckoutSession = onCall({
     id: session.id,
   };
 });
+
+// ─── setUserAsAdmin (admin-only function) ────────────────────────────────────
+
+exports.setUserAsAdmin = onCall({
+  maxInstances: 10,
+  invoker: 'public',
+}, async (request) => {
+  const callerUid = request.auth?.uid;
+  const { email } = request.data || {};
+
+  if (!email || typeof email !== 'string') {
+    throw new HttpsError('invalid-argument', 'email is required.');
+  }
+
+  // Verify caller is an admin
+  if (callerUid) {
+    const callerDoc = await admin.firestore().collection('users').doc(callerUid).get();
+    if (!callerDoc.exists || !callerDoc.data().isAdmin) {
+      throw new HttpsError('permission-denied', 'Only admins can set other admins.');
+    }
+  }
+
+  // Find user by email
+  const usersSnap = await admin.firestore()
+    .collection('users')
+    .where('email', '==', email.toLowerCase())
+    .limit(1)
+    .get();
+
+  if (usersSnap.empty) {
+    throw new HttpsError('not-found', `No user found with email: ${email}`);
+  }
+
+  const userDoc = usersSnap.docs[0];
+  await userDoc.ref.update({ isAdmin: true });
+
+  return {
+    uid: userDoc.id,
+    email: userDoc.data().email,
+    isAdmin: true,
+  };
+});
