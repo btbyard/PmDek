@@ -20,22 +20,31 @@ import {
   signInWithEmail, registerWithEmail, resetPassword, deleteAccount,
 } from './auth.js';
 import { renderBoard, setBoardId, createColumnBlock, resetColumnWidths } from './board.js';
-import { subscribeToCards, unsubscribeFromCards, initCardEvents, setBoardAssignedMembers, renderListView, renderCalendarView, getCardsSnapshot } from './cards.js';
+import { subscribeToCards, unsubscribeFromCards, initCardEvents, setBoardAssignedMembers, getBoardAssignedMembers, renderListView, renderCalendarView, getCardsSnapshot } from './cards.js';
 import { renderBoardsHome, openCreateBoardModal }                 from './boards-home.js';
 import { initAiChat, setAiChatMode, openAiChatWithPrompt, collapseAiChat, expandAiChat } from './ai-chat.js';
 import { doc, getDoc }                                             from 'firebase/firestore';
-import { db }                                                      from './firebase.js';
-import { ensureUserProfile, claimUsername, validateUsername, checkUsernameAvailable, updateUserDisplayName, getUserProfile, getAllUsers, setUserAdminStatus } from './users.js';
-import { createOrg, getOrgById, getOrgMembers, addMemberByUsername, removeMember, setOrgMemberAdminStatus, getAllOrganizations } from './org.js';
-import { BILLING_PLANS, getUserPlan, getUserBillingContext, canCreateOrganization, ensureBillingDefaults }      from './billing.js';
+import { ref as storageRef, uploadBytes, getDownloadURL }          from 'firebase/storage';
+import { updateProfile }                                           from 'firebase/auth';
+import { db, functions, storage, auth as firebaseAuth }            from './firebase.js';
+import { ensureUserProfile, claimUsername, validateUsername, checkUsernameAvailable, updateUserDisplayName, updateUserPhotoURL, getUserProfile, getAllUsers, setUserAdminStatus } from './users.js';
+import { createOrg, getOrgById, getOrgMembers, addMemberByUsername, removeMember, setOrgMemberRole, getAllOrganizations } from './org.js';
+import { BILLING_PLANS, getPlanConfig, getUserPlan, getUserBillingContext, canCreateOrganization, ensureBillingDefaults }      from './billing.js';
 import { httpsCallable }                                           from 'firebase/functions';
-import { functions }                                               from './firebase.js';
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
 /** Authenticated user, set on sign-in and cleared on sign-out. */
 let _user = null;
 let _userProfile = null;
+
+const BOOTSTRAP_ADMIN_EMAILS = ['bradster8@yahoo.com'];
+
+function _isGlobalAdminClient() {
+  const profileAdmin = Boolean(_userProfile?.isAdmin);
+  const email = String(_user?.email || '').toLowerCase().trim();
+  return profileAdmin || BOOTSTRAP_ADMIN_EMAILS.includes(email);
+}
 
 // Tracks whether the email form is in sign-in or register mode.
 let _emailMode = 'signin'; // 'signin' | 'register'
@@ -45,6 +54,7 @@ let _boardsList = [];
 let _currentBoardId = null;
 let _boardViewMode = 'kanban';
 let _activeViewName = 'landing';
+let _adminPanelReturnView = 'boards';
 
 // ─── Auth lifecycle ───────────────────────────────────────────────────────────
 
@@ -58,7 +68,11 @@ initAuth(
       await _openUsernamePickerModal();
       _userProfile = await getUserProfile(user.uid);
     }
-    _updateUserUI(user);
+    _updateUserUI({
+      ...user,
+      displayName: _userProfile?.displayName || user.displayName,
+      photoURL: _userProfile?.photoURL || user.photoURL,
+    });
     initAiChat(user, {
       onBoardCreated: (boardId, board) => {
         _boardsList = _getLastBoards();
@@ -104,6 +118,18 @@ document.getElementById('open-organizations-page-btn')?.addEventListener('click'
 });
 
 document.getElementById('back-to-boards-from-orgs')?.addEventListener('click', async () => {
+  await _showBoardsHome();
+});
+
+document.getElementById('back-from-admin-panel-btn')?.addEventListener('click', async () => {
+  if (_adminPanelReturnView === 'board') {
+    _showView('board');
+    return;
+  }
+  if (_adminPanelReturnView === 'organizations') {
+    await _openOrganizationsPage();
+    return;
+  }
   await _showBoardsHome();
 });
 
@@ -956,6 +982,44 @@ async function _renderTimelineInPage() {
   const body = document.getElementById('board-timeline-view');
   if (!body) return;
   const cards = getCardsSnapshot();
+  const boardMembers = getBoardAssignedMembers();
+  const membersById = new Map(boardMembers.map((m) => [m.uid, m]));
+
+  const timelineBubbleColor = (uid) => {
+    const COLORS = ['#6366f1','#8b5cf6','#ec4899','#ef4444','#f97316','#d97706','#22c55e','#14b8a6','#3b82f6'];
+    const text = String(uid || 'x');
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    return COLORS[hash % COLORS.length];
+  };
+
+  const timelineAssigneesHtml = (card) => {
+    const assignees = Array.isArray(card.assignees) ? card.assignees : [];
+    if (!assignees.length || membersById.size === 0) return '';
+
+    const profiles = assignees.map((uid) => membersById.get(uid)).filter(Boolean);
+    if (!profiles.length) return '';
+
+    const maxVisible = 3;
+    const visible = profiles.slice(0, maxVisible);
+    const overflow = profiles.length - visible.length;
+
+    const bubbles = visible.map((p) => {
+      const hoverName = p.displayName || `@${p.username || p.uid}`;
+      const altText = p.displayName ? `${p.displayName} (@${p.username || ''})` : `@${p.username || p.uid}`;
+      if (p.photoURL) {
+        return `<img src="${_escHtml(p.photoURL)}" alt="${_escHtml(altText)}" title="${_escHtml(hoverName)}" class="w-5 h-5 rounded-full object-cover border border-white/80 shadow-sm flex-shrink-0" />`;
+      }
+      const initials = (p.displayName || p.username || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+      return `<span title="${_escHtml(hoverName)}" class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold text-white border border-white/80 shadow-sm flex-shrink-0" style="background:${timelineBubbleColor(p.uid)}">${_escHtml(initials)}</span>`;
+    }).join('');
+
+    const overflowChip = overflow > 0
+      ? `<span class="inline-flex items-center justify-center h-5 min-w-5 px-1.5 rounded-full text-[9px] font-semibold text-white bg-black/45 border border-white/70">+${overflow}</span>`
+      : '';
+
+    return `<div class="flex items-center gap-1">${bubbles}${overflowChip}</div>`;
+  };
   const datedCards = cards.filter((c) => Boolean(c.dueDate));
 
   if (!datedCards.length) {
@@ -988,6 +1052,7 @@ async function _renderTimelineInPage() {
     return {
       id: c.id,
       title: c.title || 'Untitled task',
+      assignees: Array.isArray(c.assignees) ? c.assignees : [],
       start,
       end: due,
       progress,
@@ -1138,6 +1203,9 @@ async function _renderTimelineInPage() {
           ${monthBandsHtml}${weekLinesHtml}${monthLinesHtml}
           <div class="absolute inset-y-1 rounded bg-gradient-to-r ${barClass}" style="left:${leftPct}%;width:${widthPct}%">
             <div class="h-full bg-black/10" style="width:${Math.max(6, r.progress)}%"></div>
+            <div class="absolute right-1 top-1/2 -translate-y-1/2">
+              ${timelineAssigneesHtml(r)}
+            </div>
           </div>
         </div>
       </div>`;
@@ -1407,7 +1475,7 @@ function _openAccountMenu(triggerBtn) {
   menu.style.top  = `${rect.bottom + 6}px`;
   menu.style.right = `${window.innerWidth - rect.right}px`;
 
-  const adminButtonHtml = _userProfile?.isAdmin ? `
+  const adminButtonHtml = _isGlobalAdminClient() ? `
     <button data-action="admin-panel"
       class="w-full text-left px-4 py-2 hover:bg-amber-50 transition-colors flex items-center gap-2 text-amber-700">
       <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1454,6 +1522,14 @@ function _openAccountMenu(triggerBtn) {
       </svg>
       Reset password
     </button>
+    <button data-action="support-ticket"
+      class="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center gap-2 text-blue-700">
+      <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M18.364 5.636A9 9 0 115.636 18.364 9 9 0 0118.364 5.636zM12 8v4m0 4h.01"/>
+      </svg>
+      Support Ticket
+    </button>
     <div class="my-1 border-t border-gray-100"></div>
     <button data-action="signout"
       class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
@@ -1475,10 +1551,10 @@ function _openAccountMenu(triggerBtn) {
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
 
-  if (_userProfile?.isAdmin) {
+  if (_isGlobalAdminClient()) {
     menu.querySelector('[data-action="admin-panel"]')?.addEventListener('click', () => {
       menu.remove();
-      _openAdminPanel();
+      _openAdminPanel(_activeViewName);
     });
   }
 
@@ -1510,6 +1586,107 @@ function _openAccountMenu(triggerBtn) {
       _showSimpleModal('Password reset email sent to ' + _user.email + '. Check your inbox.');
     } catch (err) {
       _showSimpleModal('Could not send reset email: ' + (err.message || err));
+    }
+  });
+
+  menu.querySelector('[data-action="support-ticket"]').addEventListener('click', () => {
+    menu.remove();
+    _openSupportTicketModal();
+  });
+}
+
+// ─── Support Ticket modal ─────────────────────────────────────────────────────
+
+function _openSupportTicketModal() {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+        <div class="flex items-center gap-3 mb-5">
+          <span class="text-2xl">🎫</span>
+          <h3 class="text-lg font-semibold text-gray-900">Open Support Ticket</h3>
+        </div>
+        <form id="support-ticket-form" class="flex flex-col gap-3">
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Category</label>
+            <select id="support-ticket-category"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+              <option value="bug">Bug / Something broken</option>
+              <option value="billing">Billing / Account</option>
+              <option value="feature">Feature request</option>
+              <option value="question">General question</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Subject</label>
+            <input id="support-ticket-subject" type="text" maxlength="120" required
+              placeholder="Brief summary of your issue"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Message</label>
+            <textarea id="support-ticket-message" rows="5" maxlength="2000" required
+              placeholder="Describe the issue in detail…"
+              class="w-full rounded-lg border-gray-300 text-sm resize-none focus:ring-brand-500 focus:border-brand-500"></textarea>
+          </div>
+          <p id="support-ticket-error" class="hidden text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></p>
+          <div class="flex justify-end gap-2 mt-1">
+            <button type="button" id="support-ticket-cancel"
+              class="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
+              Cancel
+            </button>
+            <button type="submit" id="support-ticket-submit"
+              class="gold-btn px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors">
+              Submit Ticket
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('support-ticket-cancel').addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+
+  document.getElementById('support-ticket-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const submitBtn = document.getElementById('support-ticket-submit');
+    const errorEl  = document.getElementById('support-ticket-error');
+    const category = document.getElementById('support-ticket-category').value;
+    const subject  = document.getElementById('support-ticket-subject').value.trim();
+    const message  = document.getElementById('support-ticket-message').value.trim();
+
+    if (!subject || !message) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting…';
+    errorEl.classList.add('hidden');
+
+    try {
+      const { collection, addDoc, serverTimestamp } = await import('firebase/firestore');
+      const { db } = await import('./firebase.js');
+      await addDoc(collection(db, 'supportTickets'), {
+        uid:         _user.uid,
+        email:       _user.email || '',
+        displayName: _userProfile?.displayName || _user.displayName || '',
+        category,
+        subject,
+        message,
+        status:      'open',
+        createdAt:   serverTimestamp(),
+      });
+      close();
+      _showSimpleModal('✅ Your support ticket has been submitted. We will get back to you soon.');
+    } catch (err) {
+      console.error('Support ticket submission failed:', err);
+      errorEl.textContent = 'Could not submit ticket: ' + (err.message || err);
+      errorEl.classList.remove('hidden');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Ticket';
     }
   });
 }
@@ -1786,6 +1963,9 @@ async function _openUsernamePickerModal() {
 async function _openAccountSettingsModal() {
   const modalRoot = document.getElementById('modal-root');
   _userProfile = await getUserProfile(_user.uid);
+  const profileDisplayName = _userProfile?.displayName || _user.displayName || _user.email || 'User';
+  const profileInitials = _getUserInitials(profileDisplayName);
+  const currentPhotoURL = _userProfile?.photoURL || _user.photoURL || '';
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -1797,6 +1977,28 @@ async function _openAccountSettingsModal() {
 
         <div class="space-y-3 pb-4 border-b border-gray-100">
           <h4 class="text-sm font-semibold text-gray-800">Profile</h4>
+          <div>
+            <label class="block text-xs text-gray-500 mb-2">Profile picture</label>
+            <div class="flex items-center gap-3">
+              <div class="relative w-16 h-16">
+                <img id="acct-photo-preview" src="${_escHtml(currentPhotoURL)}" alt="${_escHtml(profileDisplayName)}"
+                  class="w-16 h-16 rounded-full object-cover border border-gray-200 ${currentPhotoURL ? '' : 'hidden'}" />
+                <div id="acct-photo-fallback"
+                  class="w-16 h-16 rounded-full bg-gray-200 text-gray-700 text-sm font-semibold border border-gray-200 flex items-center justify-center ${currentPhotoURL ? 'hidden' : ''}">
+                  ${_escHtml(profileInitials)}
+                </div>
+              </div>
+              <div class="flex-1">
+                <input id="acct-photo-input" type="file" accept="image/*"
+                  class="block w-full text-xs text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200" />
+                <p class="mt-1 text-[11px] text-gray-500">PNG, JPG, or WEBP up to 3MB. Upload starts automatically when selected.</p>
+                <div class="mt-2 flex items-center gap-2">
+                  <button id="acct-photo-remove" class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg">Remove</button>
+                </div>
+                <p id="acct-photo-status" class="hidden mt-2 text-xs"></p>
+              </div>
+            </div>
+          </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">Username</label>
             <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">@${_escHtml(_userProfile?.username || '')}</div>
@@ -1836,9 +2038,100 @@ async function _openAccountSettingsModal() {
     const value = document.getElementById('acct-display-name')?.value?.trim() || '';
     if (!value) return;
     await updateUserDisplayName(_user.uid, value);
+    if (firebaseAuth.currentUser) {
+      try { await updateProfile(firebaseAuth.currentUser, { displayName: value }); } catch (_) { /* non-blocking */ }
+    }
     _userProfile = { ..._userProfile, displayName: value };
-    _updateUserUI({ ..._user, displayName: value });
+    _updateUserUI({ ..._user, displayName: value, photoURL: _userProfile?.photoURL || _user.photoURL || '' });
     _showSimpleModal('Display name updated.');
+  });
+
+  const photoInput = document.getElementById('acct-photo-input');
+  const photoRemoveBtn = document.getElementById('acct-photo-remove');
+  const photoPreview = document.getElementById('acct-photo-preview');
+  const photoFallback = document.getElementById('acct-photo-fallback');
+  const photoStatus = document.getElementById('acct-photo-status');
+
+  const setPhotoStatus = (text, tone = 'ok') => {
+    if (!photoStatus) return;
+    photoStatus.textContent = text;
+    photoStatus.classList.remove('hidden', 'text-green-700', 'text-red-600', 'text-gray-600');
+    photoStatus.classList.add(tone === 'error' ? 'text-red-600' : (tone === 'info' ? 'text-gray-600' : 'text-green-700'));
+  };
+
+  const applyPhotoState = (url) => {
+    const hasPhoto = Boolean(url);
+    if (photoPreview) {
+      photoPreview.src = hasPhoto ? url : '';
+      photoPreview.classList.toggle('hidden', !hasPhoto);
+    }
+    if (photoFallback) photoFallback.classList.toggle('hidden', hasPhoto);
+  };
+
+  const _uploadSelectedPhoto = async () => {
+    const file = photoInput?.files?.[0];
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      setPhotoStatus('Please choose a valid image file.', 'error');
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      setPhotoStatus('Image must be 3MB or smaller.', 'error');
+      return;
+    }
+
+    if (photoInput) photoInput.disabled = true;
+    if (photoRemoveBtn) photoRemoveBtn.disabled = true;
+    setPhotoStatus('Uploading photo...', 'info');
+    try {
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const path = `profile-photos/${_user.uid}/${Date.now()}.${ext || 'jpg'}`;
+      const fileRef = storageRef(storage, path);
+      await uploadBytes(fileRef, file, { contentType: file.type });
+      const url = await getDownloadURL(fileRef);
+
+      await updateUserPhotoURL(_user.uid, url);
+      if (firebaseAuth.currentUser) {
+        try { await updateProfile(firebaseAuth.currentUser, { photoURL: url }); } catch (_) { /* non-blocking */ }
+      }
+
+      _userProfile = { ..._userProfile, photoURL: url };
+      _updateUserUI({ ..._user, displayName: _userProfile?.displayName || _user.displayName, photoURL: url });
+      applyPhotoState(url);
+      setPhotoStatus('Profile photo updated.', 'ok');
+      if (photoInput) photoInput.value = '';
+    } catch (err) {
+      console.error('Profile photo upload failed:', err);
+      setPhotoStatus(err?.message || 'Could not upload photo.', 'error');
+    } finally {
+      if (photoInput) photoInput.disabled = false;
+      if (photoRemoveBtn) photoRemoveBtn.disabled = false;
+    }
+  };
+
+  photoInput?.addEventListener('change', _uploadSelectedPhoto);
+
+  photoRemoveBtn?.addEventListener('click', async () => {
+    photoRemoveBtn.disabled = true;
+    setPhotoStatus('Removing photo...', 'info');
+    try {
+      await updateUserPhotoURL(_user.uid, '');
+      if (firebaseAuth.currentUser) {
+        try { await updateProfile(firebaseAuth.currentUser, { photoURL: '' }); } catch (_) { /* non-blocking */ }
+      }
+      _userProfile = { ..._userProfile, photoURL: '' };
+      _updateUserUI({ ..._user, displayName: _userProfile?.displayName || _user.displayName, photoURL: '' });
+      applyPhotoState('');
+      setPhotoStatus('Profile photo removed.', 'ok');
+      if (photoInput) photoInput.value = '';
+    } catch (err) {
+      console.error('Profile photo remove failed:', err);
+      setPhotoStatus(err?.message || 'Could not remove photo.', 'error');
+    } finally {
+      photoRemoveBtn.disabled = false;
+    }
   });
 
   document.getElementById('acct-delete-account-btn')?.addEventListener('click', () => {
@@ -1861,6 +2154,8 @@ async function _openOrganizationsPage() {
   const org = _userProfile?.organizationId ? await getOrgById(_userProfile.organizationId) : null;
   const isOwner = Boolean(org && org.ownerId === _user.uid);
   const isOrgAdmin = Boolean(org && (isOwner || (Array.isArray(org.admins) && org.admins.includes(_user.uid))));
+  const orgOwnerProfile = org?.ownerId ? await getUserProfile(org.ownerId) : null;
+  const orgPlan = getPlanConfig(orgOwnerProfile?.billingPlan || 'free');
 
   // Admins see all members; regular members only see owner + admins
   let members = [];
@@ -1879,28 +2174,41 @@ async function _openOrganizationsPage() {
     const label = m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`;
     const rowIsOwner = org && m.uid === org.ownerId;
     const rowIsAdmin = rowIsOwner || (Array.isArray(org?.admins) && org.admins.includes(m.uid));
-    const roleChip = rowIsOwner
-      ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">Owner</span>'
+    const roleMap = org?.memberRoles && typeof org.memberRoles === 'object' ? org.memberRoles : {};
+    const persistedRole = String(roleMap[m.uid] || '').toLowerCase();
+    const effectiveRole = rowIsOwner
+      ? 'owner'
       : rowIsAdmin
-        ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">Org Admin</span>'
-        : '<span class="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Member</span>';
-
-    const adminToggleBtn = (isOwner && !rowIsOwner)
-      ? `<button type="button" class="org-toggle-admin-btn text-xs text-sky-700 hover:text-sky-800" data-uid="${m.uid}" data-is-admin="${rowIsAdmin ? '1' : '0'}">${rowIsAdmin ? 'Remove admin' : 'Make admin'}</button>`
-      : '';
+        ? 'admin'
+        : (persistedRole === 'read-only' || persistedRole === 'collaborator' ? persistedRole : 'collaborator');
+    const roleControl = rowIsOwner
+      ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">Owner</span>'
+      : isOrgAdmin
+        ? `<label class="text-[10px] text-gray-500 inline-flex items-center gap-1">
+            <span>Role</span>
+            <select class="org-role-select rounded border-gray-300 text-[11px] py-0.5 pl-1.5 pr-5 text-gray-700 focus:ring-brand-500 focus:border-brand-500" data-uid="${m.uid}">
+              <option value="admin" ${effectiveRole === 'admin' ? 'selected' : ''}>Org Admin</option>
+              <option value="collaborator" ${effectiveRole === 'collaborator' ? 'selected' : ''}>Collaborator</option>
+              <option value="read-only" ${effectiveRole === 'read-only' ? 'selected' : ''}>Read-only</option>
+            </select>
+          </label>`
+        : effectiveRole === 'admin'
+          ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">Org Admin</span>'
+          : effectiveRole === 'read-only'
+            ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">Read-only</span>'
+            : '<span class="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Collaborator</span>';
 
     const removeBtn = (isOrgAdmin && !rowIsOwner && m.uid !== _user.uid)
       ? `<button type="button" class="org-remove-btn text-xs text-red-600 hover:text-red-700" data-uid="${m.uid}">Remove</button>`
       : '';
 
     return `
-      <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0 gap-3">
+      <div class="org-member-row flex items-center justify-between py-2 border-b border-gray-100 last:border-0 gap-3" data-search="${_escHtml((label || '').toLowerCase())}">
         <div class="min-w-0">
           <p class="text-sm text-gray-800 truncate">${_escHtml(label)}</p>
         </div>
         <div class="flex items-center gap-2 flex-shrink-0">
-          ${roleChip}
-          ${adminToggleBtn}
+          ${roleControl}
           ${removeBtn}
         </div>
       </div>`;
@@ -1913,10 +2221,17 @@ async function _openOrganizationsPage() {
           <div>
             <h2 class="text-xl font-semibold text-gray-800">${_escHtml(org.name || 'Organization')}</h2>
             <p class="text-xs text-gray-500">${isOwner ? 'You are the owner' : (isOrgAdmin ? 'You are an org admin' : 'You are a member')}</p>
+            <p class="text-xs text-brand-700 mt-0.5">Plan: ${_escHtml(orgPlan.label)} (${_escHtml(orgPlan.key)})</p>
           </div>
           <div class="text-xs text-gray-500">${isOrgAdmin ? `Members: ${members.length}` : ''}</div>
         </div>
         <h3 class="text-xs font-medium text-gray-500 mb-1">${isOrgAdmin ? 'All Members' : 'Organization Managers'}</h3>
+        ${isOrgAdmin ? `
+        <div class="mb-2">
+          <input id="org-members-search" type="text" placeholder="Search members by name or username"
+            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+        </div>
+        ` : ''}
         <div class="rounded-lg border border-gray-200 px-3">
           ${memberRows || '<p class="text-sm text-gray-500 py-2">No members yet.</p>'}
         </div>
@@ -1925,13 +2240,34 @@ async function _openOrganizationsPage() {
       ${isOrgAdmin ? `
       <section class="rounded-xl border border-gray-200 bg-white p-5">
         <h3 class="text-sm font-semibold text-gray-800 mb-2">Manage Members</h3>
-        <form id="org-invite-form" class="space-y-2">
-          <input id="org-invite-username" type="text" maxlength="20" placeholder="username"
-            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-          <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Add user</button>
-        </form>
-        <p class="mt-2 text-xs text-gray-500">Use username only (without @).</p>
+        <div class="space-y-4">
+          <div>
+            <p class="text-xs font-semibold text-gray-600 mb-1">Add Existing Account User</p>
+            <form id="org-invite-form" class="space-y-2">
+              <input id="org-invite-username" type="text" maxlength="20" placeholder="username"
+                class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+              <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Add existing user</button>
+            </form>
+            <p class="mt-1 text-xs text-gray-500">Use username only (without @).</p>
+          </div>
+
+          <div class="border-t border-gray-100 pt-3">
+            <p class="text-xs font-semibold text-gray-600 mb-1">Add New User (Email Invite)</p>
+            <form id="org-email-invite-form" class="space-y-2">
+              <input id="org-invite-email" type="email" maxlength="160" placeholder="user@example.com"
+                class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+              <select id="org-invite-role" class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+                <option value="collaborator">Collaborator</option>
+                <option value="read-only">Read-only</option>
+                <option value="admin">Org Admin</option>
+              </select>
+              <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 rounded-lg">Send invite email</button>
+            </form>
+            <p class="mt-1 text-xs text-gray-500">Opens your email app with a prefilled invite message and join link.</p>
+          </div>
+        </div>
         <p id="org-settings-error" class="hidden mt-2 text-xs text-red-600"></p>
+        <p id="org-settings-success" class="hidden mt-2 text-xs text-emerald-700"></p>
       </section>
       ` : ''}
     </div>
@@ -1949,6 +2285,7 @@ async function _openOrganizationsPage() {
   `;
 
   const errorEl = document.getElementById('org-settings-error');
+  const successEl = document.getElementById('org-settings-success');
 
   document.getElementById('org-create-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1967,6 +2304,7 @@ async function _openOrganizationsPage() {
 
   document.getElementById('org-invite-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (successEl) successEl.classList.add('hidden');
     const username = document.getElementById('org-invite-username')?.value?.trim().toLowerCase() || '';
     const validation = validateUsername(username);
     if (validation) {
@@ -1983,16 +2321,63 @@ async function _openOrganizationsPage() {
     }
   });
 
-  document.querySelectorAll('.org-toggle-admin-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+  document.getElementById('org-email-invite-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (errorEl) errorEl.classList.add('hidden');
+    if (successEl) successEl.classList.add('hidden');
+
+    const email = (document.getElementById('org-invite-email')?.value || '').trim().toLowerCase();
+    const role = (document.getElementById('org-invite-role')?.value || 'collaborator').trim().toLowerCase();
+    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if (!validEmail) {
+      errorEl.textContent = 'Enter a valid email address.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    try {
+      const baseUrl = `${window.location.origin}${window.location.pathname}`;
+      const inviteUrl = `${baseUrl}?orgInvite=1&orgId=${encodeURIComponent(org.id)}&role=${encodeURIComponent(role)}`;
+      const roleLabel = role === 'read-only' ? 'Read-only' : (role === 'admin' ? 'Org Admin' : 'Collaborator');
+      const subject = `Invitation to join ${org.name} on PMDeck`;
+      const body = [
+        `Hi,`,
+        ``,
+        `${_userProfile?.displayName || _user?.email || 'A PMDeck user'} invited you to join the organization "${org.name}" as ${roleLabel}.`,
+        ``,
+        `Join link: ${inviteUrl}`,
+        ``,
+        `If you do not have an account yet, sign up first, then open the link again.`,
+      ].join('\n');
+
+      window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      if (successEl) {
+        successEl.textContent = 'Email draft opened. Send it to deliver the invite link.';
+        successEl.classList.remove('hidden');
+      }
+    } catch (err) {
+      errorEl.textContent = err.message || 'Could not prepare invite email.';
+      errorEl.classList.remove('hidden');
+    }
+  });
+
+  document.querySelectorAll('.org-role-select').forEach((sel) => {
+    sel.addEventListener('change', async () => {
       try {
-        const makeAdmin = btn.dataset.isAdmin !== '1';
-        await setOrgMemberAdminStatus(org.id, btn.dataset.uid, makeAdmin);
+        await setOrgMemberRole(org.id, sel.dataset.uid, sel.value);
         await _openOrganizationsPage();
       } catch (err) {
-        errorEl.textContent = err.message || 'Could not update org admin.';
+        errorEl.textContent = err.message || 'Could not update member role.';
         errorEl.classList.remove('hidden');
       }
+    });
+  });
+
+  document.getElementById('org-members-search')?.addEventListener('input', (e) => {
+    const term = String(e.target.value || '').trim().toLowerCase();
+    document.querySelectorAll('.org-member-row').forEach((row) => {
+      const hay = row.dataset.search || '';
+      row.classList.toggle('hidden', Boolean(term) && !hay.includes(term));
     });
   });
 
@@ -2011,168 +2396,321 @@ async function _openOrganizationsPage() {
 
 // ─── Admin panel ──────────────────────────────────────────────────────────────
 
-async function _openAdminPanel() {
-  const modalRoot = document.getElementById('modal-root');
-  
-  // Fetch all users and orgs
-  const allUsers = await getAllUsers();
-  const allOrgs = await getAllOrganizations();
-  const { getDocs, collection, query, where } = await import('firebase/firestore');
-  const { db } = await import('./firebase.js');
-  
-  // Fetch all boards to calculate content used
-  const boardsSnap = await getDocs(collection(db, 'boards'));
-  const cardsSnap = await getDocs(collection(db, 'cards'));
-  
-  const stats = {
-    totalUsers: allUsers.length,
-    totalOrgs: allOrgs.length,
-    totalBoards: boardsSnap.size,
-    totalCards: cardsSnap.size,
-  };
-  
-  // Build users table HTML
-  const usersTableHtml = allUsers.map((user) => {
-    const planKey = user.billingPlan || 'free';
-    const isUserAdmin = Boolean(user.isAdmin);
-    return `
-      <tr class="border-b border-gray-200 hover:bg-gray-50">
-        <td class="px-4 py-3 text-sm"><span class="font-medium">${_escHtml(user.displayName || user.username || user.uid)}</span></td>
-        <td class="px-4 py-3 text-sm">${_escHtml(user.email || '—')}</td>
-        <td class="px-4 py-3 text-sm">
-          ${isUserAdmin ? '<span class="px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">✨ Admin</span>' : '<span class="text-gray-500">—</span>'}
-        </td>
-        <td class="px-4 py-3 text-sm">
-          <span class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">${planKey}</span>
-        </td>
-        <td class="px-4 py-3 text-sm">
-          <button class="admin-toggle-user-btn text-xs px-2 py-1 rounded border transition-colors" data-uid="${user.uid}" data-is-admin="${isUserAdmin ? '1' : '0'}"
-            style="color: ${isUserAdmin ? '#dc2626' : '#059669'}; border-color: ${isUserAdmin ? '#dc2626' : '#059669'};">
-            ${isUserAdmin ? 'Remove Admin' : 'Make Admin'}
-          </button>
-        </td>
-      </tr>
-    `;
-  }).join('');
-  
-  // Build orgs table HTML
-  const orgsTableHtml = allOrgs.map((org) => {
-    const memberCount = Array.isArray(org.members) ? org.members.length : 0;
-    const adminCount = Array.isArray(org.admins) ? org.admins.length : 0;
-    return `
-      <tr class="border-b border-gray-200 hover:bg-gray-50">
-        <td class="px-4 py-3 text-sm"><span class="font-medium">${_escHtml(org.name)}</span></td>
-        <td class="px-4 py-3 text-sm">${memberCount}</td>
-        <td class="px-4 py-3 text-sm">
-          <span class="px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-800">${adminCount}</span>
-        </td>
-        <td class="px-4 py-3 text-sm text-gray-500">${org.id}</td>
-      </tr>
-    `;
-  }).join('');
-  
-  modalRoot.innerHTML = `
-    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-6xl p-6 max-h-[85vh] overflow-y-auto">
-        <div class="flex items-center justify-between mb-6">
-          <div class="flex items-center gap-2">
-            <span class="text-2xl">⚡</span>
-            <h2 class="text-2xl font-semibold text-gray-800">Admin Panel</h2>
-          </div>
-          <button id="admin-close" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+async function _openAdminPanel(returnViewName = _activeViewName) {
+  _adminPanelReturnView = returnViewName === 'admin-panel' ? 'boards' : (returnViewName || 'boards');
+  _showView('admin-panel');
+
+  const root = document.getElementById('admin-panel-root');
+  if (!root) return;
+
+  root.innerHTML = `
+    <div class="rounded-xl border border-gray-200 bg-white p-8 text-sm text-gray-500">Loading admin data…</div>
+  `;
+
+  try {
+    const allUsers = await getAllUsers();
+    const allOrgs = await getAllOrganizations();
+    const { getDocs, collection } = await import('firebase/firestore');
+    const { db } = await import('./firebase.js');
+
+    const boardsSnap = await getDocs(collection(db, 'boards'));
+    const cardsSnap = await getDocs(collection(db, 'cards'));
+    const ticketsSnap = await getDocs(collection(db, 'supportTickets'));
+
+    const PAID_PLANS = ['mid', 'pro', 'business-small', 'business-growth'];
+    const allTickets = ticketsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const stats = {
+      totalUsers: allUsers.length,
+      freeUsers: allUsers.filter((u) => !PAID_PLANS.includes(u.billingPlan)).length,
+      paidUsers: allUsers.filter((u) => PAID_PLANS.includes(u.billingPlan)).length,
+      totalOrgs: allOrgs.length,
+      totalBoards: boardsSnap.size,
+      totalCards: cardsSnap.size,
+      openTickets: allTickets.filter((t) => t.status === 'open').length,
+    };
+
+    const usersTableHtml = allUsers.map((user) => {
+      const planKey = user.billingPlan || 'free';
+      const isUserAdmin = Boolean(user.isAdmin);
+      return `
+        <tr class="border-b border-gray-200 hover:bg-gray-50">
+          <td class="px-4 py-3 text-sm"><span class="font-medium">${_escHtml(user.displayName || user.username || user.uid)}</span></td>
+          <td class="px-4 py-3 text-sm">${_escHtml(user.email || '—')}</td>
+          <td class="px-4 py-3 text-sm">
+            ${isUserAdmin ? '<span class="px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">✨ Admin</span>' : '<span class="text-gray-500">—</span>'}
+          </td>
+          <td class="px-4 py-3 text-sm">
+            <span class="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800">${planKey}</span>
+          </td>
+          <td class="px-4 py-3 text-sm">
+            <button class="admin-toggle-user-btn text-xs px-2 py-1 rounded border transition-colors" data-uid="${user.uid}" data-is-admin="${isUserAdmin ? '1' : '0'}" data-name="${_escHtml(user.displayName || user.username || user.email || user.uid)}"
+              style="color: ${isUserAdmin ? '#dc2626' : '#059669'}; border-color: ${isUserAdmin ? '#dc2626' : '#059669'};">
+              ${isUserAdmin ? 'Remove Admin' : 'Make Admin'}
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    const orgsTableHtml = allOrgs.map((org) => {
+      const memberCount = Array.isArray(org.members) ? org.members.length : 0;
+      const adminCount = Array.isArray(org.admins) ? org.admins.length : 0;
+      return `
+        <tr class="border-b border-gray-200 hover:bg-gray-50">
+          <td class="px-4 py-3 text-sm"><span class="font-medium">${_escHtml(org.name)}</span></td>
+          <td class="px-4 py-3 text-sm">${memberCount}</td>
+          <td class="px-4 py-3 text-sm">
+            <span class="px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-800">${adminCount}</span>
+          </td>
+          <td class="px-4 py-3 text-sm text-gray-500">${org.id}</td>
+        </tr>
+      `;
+    }).join('');
+
+    root.innerHTML = `
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-4">
+        <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-blue-50 to-blue-100 p-4">
+          <p class="text-xs text-blue-700 font-semibold">Total Users</p>
+          <p class="mt-2 text-2xl font-bold text-blue-900">${stats.totalUsers}</p>
         </div>
-        
-        <!-- Stats Row -->
-        <div class="grid grid-cols-4 gap-4 mb-6">
-          <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-blue-50 to-blue-100 p-4">
-            <p class="text-xs text-blue-700 font-semibold">Total Users</p>
-            <p class="mt-2 text-2xl font-bold text-blue-900">${stats.totalUsers}</p>
-          </div>
-          <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-purple-50 to-purple-100 p-4">
-            <p class="text-xs text-purple-700 font-semibold">Organizations</p>
-            <p class="mt-2 text-2xl font-bold text-purple-900">${stats.totalOrgs}</p>
-          </div>
-          <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-green-50 to-green-100 p-4">
-            <p class="text-xs text-green-700 font-semibold">Boards</p>
-            <p class="mt-2 text-2xl font-bold text-green-900">${stats.totalBoards}</p>
-          </div>
-          <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-amber-50 to-amber-100 p-4">
-            <p class="text-xs text-amber-700 font-semibold">Cards</p>
-            <p class="mt-2 text-2xl font-bold text-amber-900">${stats.totalCards}</p>
-          </div>
+        <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-purple-50 to-purple-100 p-4">
+          <p class="text-xs text-purple-700 font-semibold">Organizations</p>
+          <p class="mt-2 text-2xl font-bold text-purple-900">${stats.totalOrgs}</p>
         </div>
-        
-        <!-- Users Section -->
-        <div class="mb-8">
-          <h3 class="text-lg font-semibold text-gray-800 mb-3">Users (${stats.totalUsers})</h3>
-          <div class="overflow-x-auto rounded-lg border border-gray-200">
-            <table class="w-full text-sm">
-              <thead class="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Name</th>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Email</th>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Plan</th>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${usersTableHtml}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        
-        <!-- Organizations Section -->
-        <div class="mb-8">
-          <h3 class="text-lg font-semibold text-gray-800 mb-3">Organizations (${stats.totalOrgs})</h3>
-          <div class="overflow-x-auto rounded-lg border border-gray-200">
-            <table class="w-full text-sm">
-              <thead class="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Org Name</th>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Members</th>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Admins</th>
-                  <th class="px-4 py-3 text-left font-semibold text-gray-700">Org ID</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${orgsTableHtml}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        
-        <div class="flex justify-end">
-          <button id="admin-close-btn" class="px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors">
-            Close
-          </button>
+        <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-green-50 to-green-100 p-4">
+          <p class="text-xs text-green-700 font-semibold">Boards</p>
+          <p class="mt-2 text-2xl font-bold text-green-900">${stats.totalBoards}</p>
         </div>
       </div>
-    </div>
-  `;
-  
-  const close = () => { modalRoot.innerHTML = ''; };
-  document.getElementById('admin-close').addEventListener('click', close);
-  document.getElementById('admin-close-btn').addEventListener('click', close);
-  modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) close();
-  });
-  
-  // Add event listeners for admin toggle buttons
-  document.querySelectorAll('.admin-toggle-user-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const uid = btn.dataset.uid;
-      const currentIsAdmin = btn.dataset.isAdmin === '1';
-      try {
-        await setUserAdminStatus(uid, !currentIsAdmin);
-        await _openAdminPanel();
-      } catch (err) {
-        console.error('Failed to toggle admin status:', err);
-        alert('Failed to update admin status: ' + (err.message || err));
-      }
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-amber-50 to-amber-100 p-4">
+          <p class="text-xs text-amber-700 font-semibold">Cards</p>
+          <p class="mt-2 text-2xl font-bold text-amber-900">${stats.totalCards}</p>
+        </div>
+        <div class="rounded-lg border border-gray-200 bg-gradient-to-br from-slate-50 to-slate-100 p-4">
+          <p class="text-xs text-slate-600 font-semibold">Free Plan Users</p>
+          <p class="mt-2 text-2xl font-bold text-slate-800">${stats.freeUsers}</p>
+        </div>
+        <div class="rounded-lg border border-emerald-200 bg-gradient-to-br from-emerald-50 to-emerald-100 p-4">
+          <p class="text-xs text-emerald-700 font-semibold">Paid Plan Users</p>
+          <p class="mt-2 text-2xl font-bold text-emerald-900">${stats.paidUsers}</p>
+        </div>
+        <div class="rounded-lg border border-blue-200 bg-gradient-to-br from-blue-50 to-blue-100 p-4">
+          <p class="text-xs text-blue-700 font-semibold">Open Tickets</p>
+          <p class="mt-2 text-2xl font-bold text-blue-900">${stats.openTickets}</p>
+        </div>
+      </div>
+
+      <div class="mb-8">
+        <h3 class="text-lg font-semibold text-gray-800 mb-3">Users (${stats.totalUsers})</h3>
+        <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Name</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Email</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Plan</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${usersTableHtml}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="mb-8">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-lg font-semibold text-gray-800">Support Tickets (${allTickets.length})</h3>
+        </div>
+        <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">User</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Category</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Subject</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Date</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${allTickets.length === 0 ? '<tr><td colspan="6" class="px-4 py-6 text-center text-gray-400 text-sm">No support tickets yet.</td></tr>' : allTickets.sort((a, b) => {
+                const at = a.createdAt?.toMillis?.() ?? 0;
+                const bt = b.createdAt?.toMillis?.() ?? 0;
+                return bt - at;
+              }).map((ticket) => {
+                const statusColor = ticket.status === 'open'
+                  ? 'bg-blue-100 text-blue-800'
+                  : ticket.status === 'resolved'
+                  ? 'bg-green-100 text-green-800'
+                  : 'bg-gray-100 text-gray-700';
+                const dateStr = ticket.createdAt?.toDate ? ticket.createdAt.toDate().toLocaleDateString() : '—';
+                return `
+                  <tr class="border-b border-gray-200 hover:bg-gray-50">
+                    <td class="px-4 py-3 text-sm">
+                      <span class="font-medium">${_escHtml(ticket.displayName || ticket.email || ticket.uid)}</span>
+                      <span class="block text-xs text-gray-400">${_escHtml(ticket.email || '')}</span>
+                    </td>
+                    <td class="px-4 py-3 text-sm capitalize">${_escHtml(ticket.category || '—')}</td>
+                    <td class="px-4 py-3 text-sm max-w-xs">
+                      <button class="admin-ticket-view-btn text-left text-blue-600 hover:underline truncate block max-w-[200px]"
+                        data-ticket-id="${ticket.id}"
+                        data-subject="${_escHtml(ticket.subject)}"
+                        data-message="${_escHtml(ticket.message)}"
+                        data-name="${_escHtml(ticket.displayName || ticket.email || '')}"
+                        title="${_escHtml(ticket.subject)}">${_escHtml(ticket.subject)}</button>
+                    </td>
+                    <td class="px-4 py-3 text-sm">
+                      <span class="px-2 py-1 rounded-full text-xs font-medium ${statusColor}">${_escHtml(ticket.status || 'open')}</span>
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-500">${dateStr}</td>
+                    <td class="px-4 py-3 text-sm">
+                      <select class="admin-ticket-status-select text-xs rounded border border-gray-300 px-1 py-0.5" data-ticket-id="${ticket.id}" data-current="${_escHtml(ticket.status || 'open')}">
+                        <option value="open" ${ticket.status === 'open' ? 'selected' : ''}>Open</option>
+                        <option value="in-progress" ${ticket.status === 'in-progress' ? 'selected' : ''}>In Progress</option>
+                        <option value="resolved" ${ticket.status === 'resolved' ? 'selected' : ''}>Resolved</option>
+                        <option value="closed" ${ticket.status === 'closed' ? 'selected' : ''}>Closed</option>
+                      </select>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="mb-8">
+        <h3 class="text-lg font-semibold text-gray-800 mb-3">Organizations (${stats.totalOrgs})</h3>
+        <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Org Name</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Members</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Admins</th>
+                <th class="px-4 py-3 text-left font-semibold text-gray-700">Org ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${orgsTableHtml}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    // ── Admin toggle listeners ──────────────────────────────────────────────
+    root.querySelectorAll('.admin-toggle-user-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const uid      = btn.dataset.uid;
+        const isAdmin  = btn.dataset.isAdmin === '1';
+        const userName = btn.dataset.name || uid;
+
+        if (!isAdmin) {
+          const modalRoot = document.getElementById('modal-root');
+          modalRoot.innerHTML = `
+            <div class="modal-backdrop fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+                <div class="flex items-center gap-3 mb-4">
+                  <span class="text-2xl">⚠️</span>
+                  <h3 class="text-lg font-semibold text-gray-900">Grant Admin Access</h3>
+                </div>
+                <p class="text-sm text-gray-700 mb-2">
+                  Are you sure you want to make <strong>${_escHtml(userName)}</strong> an entire application administrator?
+                </p>
+                <p class="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-5">
+                  Admin users have full read and write access to all data, users, organizations, and settings across the entire application.
+                </p>
+                <div class="flex justify-end gap-2">
+                  <button id="admin-confirm-cancel" class="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">Cancel</button>
+                  <button id="admin-confirm-ok" class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors">Yes, Make Admin</button>
+                </div>
+              </div>
+            </div>
+          `;
+          const close = () => { modalRoot.innerHTML = ''; };
+          document.getElementById('admin-confirm-cancel').addEventListener('click', close);
+          modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) close();
+          });
+          document.getElementById('admin-confirm-ok').addEventListener('click', async () => {
+            close();
+            try {
+              await setUserAdminStatus(uid, true);
+              await _openAdminPanel(_adminPanelReturnView);
+            } catch (err) {
+              console.error('Failed to grant admin status:', err);
+              alert('Failed to update admin status: ' + (err.message || err));
+            }
+          });
+        } else {
+          setUserAdminStatus(uid, false)
+            .then(() => _openAdminPanel(_adminPanelReturnView))
+            .catch((err) => {
+              console.error('Failed to remove admin status:', err);
+              alert('Failed to update admin status: ' + (err.message || err));
+            });
+        }
+      });
     });
-  });
+
+    // ── Support ticket: view message ───────────────────────────────────────
+    root.querySelectorAll('.admin-ticket-view-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const modalRoot = document.getElementById('modal-root');
+        modalRoot.innerHTML = `
+          <div class="modal-backdrop fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6">
+              <div class="flex items-center gap-2 mb-4">
+                <span class="text-xl">🎫</span>
+                <h3 class="text-base font-semibold text-gray-900 truncate">${btn.dataset.subject}</h3>
+              </div>
+              <p class="text-xs text-gray-500 mb-2">From: <strong>${btn.dataset.name}</strong></p>
+              <div class="bg-gray-50 rounded-lg border border-gray-200 p-4 text-sm text-gray-700 whitespace-pre-wrap max-h-72 overflow-y-auto">${btn.dataset.message}</div>
+              <div class="flex justify-end mt-4">
+                <button id="ticket-view-close" class="px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors">Close</button>
+              </div>
+            </div>
+          </div>
+        `;
+        const close = () => { modalRoot.innerHTML = ''; };
+        document.getElementById('ticket-view-close').addEventListener('click', close);
+        modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
+          if (e.target === e.currentTarget) close();
+        });
+      });
+    });
+
+    // ── Support ticket: update status ──────────────────────────────────────
+    root.querySelectorAll('.admin-ticket-status-select').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        const ticketId = sel.dataset.ticketId;
+        const newStatus = sel.value;
+        try {
+          const { doc, updateDoc } = await import('firebase/firestore');
+          const { db } = await import('./firebase.js');
+          await updateDoc(doc(db, 'supportTickets', ticketId), { status: newStatus });
+          await _openAdminPanel(_adminPanelReturnView);
+        } catch (err) {
+          console.error('Failed to update ticket status:', err);
+          alert('Could not update ticket status: ' + (err.message || err));
+        }
+      });
+    });
+
+  } catch (err) {
+    console.error('Failed to load admin panel:', err);
+    root.innerHTML = `
+      <div class="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">
+        Could not load admin panel data: ${_escHtml(err?.message || String(err))}
+      </div>
+    `;
+  }
 }
 
 // ─── Email / password form ────────────────────────────────────────────────────
@@ -2220,6 +2758,7 @@ const _views = {
   boards:  document.getElementById('boards-view'),
   organizations: document.getElementById('organizations-view'),
   board:   document.getElementById('board-view'),
+  'admin-panel': document.getElementById('admin-panel-view'),
   'ai-dashboard': document.getElementById('ai-dashboard-view'),
 };
 
@@ -2232,6 +2771,7 @@ const _viewDisplayMap = {
   boards:  'flex',
   organizations: 'flex',
   board:   'flex',
+  'admin-panel': 'flex',
   'ai-dashboard': 'flex',
 };
 
@@ -2289,15 +2829,43 @@ window.addEventListener('resize', () => {
 
 // ─── User UI ──────────────────────────────────────────────────────────────────
 
+function _getUserInitials(nameOrEmail) {
+  const safe = String(nameOrEmail || 'User').trim();
+  if (!safe) return 'U';
+  const parts = safe.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase() || 'U';
+  }
+  return safe.slice(0, 2).toUpperCase();
+}
+
 function _updateUserUI(user) {
+  const display = user.displayName || user.email || 'User';
+  const initials = _getUserInitials(display);
+
   // Class selectors so both boards-view and board-view stay in sync.
   document.querySelectorAll('.user-avatar').forEach((el) => {
-    el.src = user.photoURL || '';
-    el.alt = user.displayName || 'User';
-    el.classList.toggle('hidden', !user.photoURL);
+    const wrap = el.parentElement;
+    let fallback = wrap?.querySelector('.user-avatar-fallback');
+    if (!fallback && wrap) {
+      fallback = document.createElement('span');
+      fallback.className = 'user-avatar-fallback inline-flex items-center justify-center w-7 h-7 rounded-full bg-gray-200 text-gray-700 text-[10px] font-semibold select-none';
+      fallback.setAttribute('aria-hidden', 'true');
+      wrap.insertBefore(fallback, el.nextSibling);
+    }
+
+    const hasPhoto = Boolean(user.photoURL);
+    el.src = hasPhoto ? user.photoURL : '';
+    el.alt = display;
+    el.classList.toggle('hidden', !hasPhoto);
+    if (fallback) {
+      fallback.textContent = initials;
+      fallback.classList.toggle('hidden', hasPhoto);
+      fallback.setAttribute('title', display);
+    }
   });
   document.querySelectorAll('.user-display-name').forEach((el) => {
-    el.textContent = user.displayName || user.email || '';
+    el.textContent = display;
   });
 }
 
@@ -2336,25 +2904,4 @@ function _friendlyAuthError(code) {
   };
   return map[code] || 'Sign-in failed. Please try again.';
 }
-
-// ─── Admin setup helper ────────────────────────────────────────────────────────
-// Call from browser console: window.setupAdmin('user@example.com')
-
-window.setupAdmin = async function(email) {
-  if (!email || typeof email !== 'string') {
-    console.error('❌ Usage: window.setupAdmin("user@example.com")');
-    return;
-  }
-  try {
-    const setUserAsAdminFn = httpsCallable(functions, 'setUserAsAdmin');
-    const result = await setUserAsAdminFn({ email });
-    console.log(`✅ Admin setup complete for ${email}`, result.data);
-    return result.data;
-  } catch (err) {
-    console.error('❌ Admin setup failed:', err.message);
-    throw err;
-  }
-};
-
-console.log('💡 Tip: Call window.setupAdmin("email@example.com") from console to make a user an admin.');
 

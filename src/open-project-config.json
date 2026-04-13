@@ -1,0 +1,244 @@
+{
+  "standardQuestions": [
+    {
+      "id": "risk_assessment",
+      "label": "Project Risk Assessment",
+      "examples": [
+        "What are the risks in this project?",
+        "Give me a project risk assessment.",
+        "What are the top project risks right now?"
+      ],
+      "responseStyle": "Risk level + risk categories + top tasks + next actions"
+    },
+    {
+      "id": "priority_ranking",
+      "label": "Priority And Urgency Ranking",
+      "examples": [
+        "Rank tasks by urgency and risk.",
+        "What should we do first?",
+        "Prioritize the due-soon tasks."
+      ],
+      "responseStyle": "Ordered list with rationale per task"
+    },
+    {
+      "id": "assignee_assignment",
+      "label": "Assignee And Ownership",
+      "examples": [
+        "Who is assigned to these tasks?",
+        "Show tasks by assignee.",
+        "Who owns the due-soon tasks?"
+      ],
+      "responseStyle": "Per-task owner view + assignee workload snapshot"
+    },
+    {
+      "id": "longest_effort",
+      "label": "Longest / Highest Effort Task",
+      "examples": [
+        "What task will take the most time?",
+        "Which task is the hardest?",
+        "What is the highest-effort task?"
+      ],
+      "responseStyle": "Estimated top effort task + effort signals + top candidates"
+    },
+    {
+      "id": "project_summary",
+      "label": "Project Summary",
+      "examples": [
+        "Give me a project summary.",
+        "What is the current project status?",
+        "Summarize this project."
+      ],
+      "responseStyle": "Snapshot metrics + near-term focus + recommended actions"
+    },
+    {
+      "id": "blockers",
+      "label": "Blockers And Mitigation",
+      "examples": [
+        "What is blocked?",
+        "How do we unblock this project?",
+        "Give me mitigation steps."
+      ],
+      "responseStyle": "Blocked list + mitigation checklist"
+    },
+    {
+      "id": "sprint_window",
+      "label": "Sprint / 14-Day Plan",
+      "examples": [
+        "What should we do in the next 14 days?",
+        "Give me a two-week plan.",
+        "Sprint planning view please."
+      ],
+      "responseStyle": "14-day due work + undated planning reminders"
+    },
+    {
+      "id": "overdue_recovery",
+      "label": "Overdue Recovery",
+      "examples": [
+        "How do we recover overdue tasks?",
+        "Recovery plan for overdue items.",
+        "Help clear overdue tasks."
+      ],
+      "responseStyle": "Recovery sequence + concrete next steps"
+    },
+    {
+      "id": "recommendation_explain",
+      "label": "Explain Recommendation",
+      "examples": [
+        "Explain this recommendation.",
+        "Why did you suggest this?",
+        "Give more detail on that recommendation."
+      ],
+      "responseStyle": "Reasoning + practical action plan"
+    },
+    {
+      "id": "milestone_plan",
+      "label": "Milestone Or Task Plan",
+      "examples": [
+        "Help me plan this milestone.",
+        "Plan this task for me.",
+        "Create a milestone execution plan."
+      ],
+      "responseStyle": "Risk checks + 3-step execution plan for named task"
+    }
+  ],
+  "intentRules": [
+    {
+      "intent": "risk_assessment",
+      "priority": 90,
+      "minScore": 4,
+      "keywords": [
+        { "phrase": "what are the risks", "weight": 6 },
+        { "phrase": "project risk", "weight": 5 },
+        { "phrase": "risk assessment", "weight": 6 },
+        { "phrase": "risks in this project", "weight": 7 },
+        { "phrase": "top risks", "weight": 4 },
+        { "phrase": "risk register", "weight": 4 }
+      ]
+    },
+    {
+      "intent": "assignee_assignment",
+      "priority": 100,
+      "minScore": 3,
+      "keywords": [
+        { "phrase": "who is assigned", "weight": 7 },
+        { "phrase": "who owns", "weight": 7 },
+        { "phrase": "assigned to", "weight": 5 },
+        { "phrase": "assignee", "weight": 4 },
+        { "phrase": "owner", "weight": 3 },
+        { "phrase": "owners", "weight": 3 },
+        { "phrase": "workload by user", "weight": 6 },
+        { "phrase": "tasks by assignee", "weight": 7 },
+        { "phrase": "who is working on", "weight": 6 }
+      ]
+    },
+    {
+      "intent": "longest_effort",
+      "priority": 80,
+      "minScore": 4,
+      "keywords": [
+        { "phrase": "what task will take the most time", "weight": 8 },
+        { "phrase": "take the most time", "weight": 6 },
+        { "phrase": "most time", "weight": 4 },
+        { "phrase": "longest task", "weight": 5 },
+        { "phrase": "most effort", "weight": 6 },
+        { "phrase": "hardest task", "weight": 6 },
+        { "phrase": "biggest task", "weight": 4 }
+      ]
+    },
+    {
+      "intent": "project_summary",
+      "priority": 60,
+      "minScore": 3,
+      "keywords": [
+        { "phrase": "project summary", "weight": 7 },
+        { "phrase": "summarize", "weight": 5 },
+        { "phrase": "summary", "weight": 4 },
+        { "phrase": "status overview", "weight": 6 },
+        { "phrase": "health summary", "weight": 6 },
+        { "phrase": "project status", "weight": 6 },
+        { "phrase": "overall status", "weight": 5 }
+      ]
+    },
+    {
+      "intent": "milestone_plan",
+      "priority": 70,
+      "minScore": 3,
+      "keywords": [
+        { "phrase": "help me plan this milestone", "weight": 8 },
+        { "phrase": "plan this milestone", "weight": 7 },
+        { "phrase": "plan this task", "weight": 6 },
+        { "phrase": "milestone", "weight": 3 }
+      ]
+    },
+    {
+      "intent": "recommendation_explain",
+      "priority": 75,
+      "minScore": 3,
+      "keywords": [
+        { "phrase": "explain this recommendation", "weight": 8 },
+        { "phrase": "explain this", "weight": 5 },
+        { "phrase": "why did you suggest", "weight": 7 }
+      ]
+    },
+    {
+      "intent": "overdue_recovery",
+      "priority": 85,
+      "minScore": 3,
+      "keywords": [
+        { "phrase": "overdue", "weight": 4 },
+        { "phrase": "recover", "weight": 4 },
+        { "phrase": "recovery", "weight": 5 },
+        { "phrase": "catch up", "weight": 4 },
+        { "phrase": "behind schedule", "weight": 5 }
+      ]
+    },
+    {
+      "intent": "priority_ranking",
+      "priority": 88,
+      "minScore": 3,
+      "keywords": [
+        { "phrase": "prioritize", "weight": 6 },
+        { "phrase": "priority", "weight": 5 },
+        { "phrase": "rank", "weight": 5 },
+        { "phrase": "urgency", "weight": 4 },
+        { "phrase": "due date", "weight": 4 },
+        { "phrase": "what should we do first", "weight": 8 }
+      ]
+    },
+    {
+      "intent": "blockers",
+      "priority": 82,
+      "minScore": 3,
+      "keywords": [
+        { "phrase": "block", "weight": 3 },
+        { "phrase": "blocked", "weight": 5 },
+        { "phrase": "mitigation", "weight": 5 },
+        { "phrase": "unblock", "weight": 6 },
+        { "phrase": "dependency", "weight": 5 },
+        { "phrase": "stuck", "weight": 4 }
+      ]
+    },
+    {
+      "intent": "sprint_window",
+      "priority": 65,
+      "minScore": 3,
+      "keywords": [
+        { "phrase": "sprint", "weight": 4 },
+        { "phrase": "14 day", "weight": 5 },
+        { "phrase": "14-day", "weight": 5 },
+        { "phrase": "two week", "weight": 5 },
+        { "phrase": "next 2 weeks", "weight": 6 }
+      ]
+    }
+  ],
+  "fieldKeywords": {
+    "schedule": ["due", "deadline", "timeline", "date", "when", "delivery", "timeframe", "window", "eta", "target date", "late"],
+    "blockers": ["blocked", "blocker", "unblock", "dependency", "hold", "waiting", "risk", "stuck", "bottleneck"],
+    "assignees": ["assignee", "assigned", "owner", "who owns", "who is assigned", "workload", "responsible", "ownership"],
+    "effort": ["effort", "hard", "hardest", "complex", "complexity", "most time", "longest", "estimate", "duration", "size"],
+    "progress": ["progress", "complete", "completion", "status", "health", "summary", "overview", "done", "remaining"],
+    "scope": ["scope", "subtask", "subtasks", "breakdown", "size", "deliverable", "acceptance criteria", "definition of done"],
+    "quality": ["quality", "test", "testing", "bug", "defect", "stability", "reliability"],
+    "capacity": ["capacity", "bandwidth", "load", "overloaded", "workload", "team load"]
+  }
+}

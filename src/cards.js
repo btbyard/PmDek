@@ -154,6 +154,31 @@ export function renderListView() {
   const sortByDueDate = (a, b) => String(a.dueDate || '9999-12-31').localeCompare(String(b.dueDate || '9999-12-31'));
   const openCards = cards.filter((c) => !_isEffectivelyCompleted(c)).sort(sortByDueDate);
   const doneCards = cards.filter((c) => _isEffectivelyCompleted(c)).sort(sortByDueDate);
+  const showAssigneesColumn = _boardAssignedMembers.length > 0;
+
+  const listAssigneesHtml = (card) => {
+    const assignees = Array.isArray(card.assignees) ? card.assignees : [];
+    if (!assignees.length) return '<span class="text-gray-400 text-xs">Unassigned</span>';
+
+    const profiles = assignees
+      .map((uid) => _boardAssignedMembers.find((m) => m.uid === uid))
+      .filter(Boolean);
+
+    if (!profiles.length) return '<span class="text-gray-400 text-xs">Unassigned</span>';
+
+    const bubbles = profiles.map((p) => {
+      const hoverName = p.displayName || `@${p.username || p.uid}`;
+      const altText = p.displayName ? `${p.displayName} (@${p.username || ''})` : `@${p.username || p.uid}`;
+      if (p.photoURL) {
+        return `<img src="${escapeHtml(p.photoURL)}" alt="${escapeHtml(altText)}" title="${escapeHtml(hoverName)}" class="w-5 h-5 rounded-full object-cover border border-gray-200 flex-shrink-0" />`;
+      }
+      const bg = _uidToColor(p.uid);
+      const initials = (p.displayName || p.username || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+      return `<span title="${escapeHtml(hoverName)}" class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold text-white flex-shrink-0" style="background:${bg}">${escapeHtml(initials)}</span>`;
+    }).join('');
+
+    return `<div class="flex items-center gap-1 flex-wrap">${bubbles}</div>`;
+  };
 
   const subtaskListHtml = (card, muted = false) => {
     const subtasks = Array.isArray(card.subtasks) ? card.subtasks : [];
@@ -178,6 +203,7 @@ export function renderListView() {
             <th class="text-left px-3 py-2 w-10"></th>
             <th class="text-left px-3 py-2">Task</th>
             <th class="text-left px-3 py-2">Column</th>
+            ${showAssigneesColumn ? '<th class="text-left px-3 py-2">Assignees</th>' : ''}
             <th class="text-left px-3 py-2">Due</th>
             <th class="text-left px-3 py-2">Status</th>
           </tr>
@@ -193,13 +219,14 @@ export function renderListView() {
                 ${subtaskListHtml(c, false)}
               </td>
               <td class="px-3 py-2 text-gray-500">${escapeHtml(c.columnId || '')}</td>
+              ${showAssigneesColumn ? `<td class="px-3 py-2 text-gray-500">${listAssigneesHtml(c)}</td>` : ''}
               <td class="px-3 py-2 text-gray-500">${escapeHtml(c.dueDate || 'No due date')}</td>
               <td class="px-3 py-2">${_isEffectivelyCompleted(c) ? '<span class="text-emerald-600">Done</span>' : '<span class="text-amber-600">Open</span>'}</td>
             </tr>
           `).join('')}
           ${doneCards.length ? `
             <tr class="border-t border-gray-200 bg-gray-50/70">
-              <td class="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500" colspan="5">Completed</td>
+              <td class="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500" colspan="${showAssigneesColumn ? 6 : 5}">Completed</td>
             </tr>
           ` : ''}
           ${doneCards.map((c) => `
@@ -212,6 +239,7 @@ export function renderListView() {
                 ${subtaskListHtml(c, true)}
               </td>
               <td class="px-3 py-2 text-gray-400">${escapeHtml(c.columnId || '')}</td>
+              ${showAssigneesColumn ? `<td class="px-3 py-2 text-gray-400">${listAssigneesHtml(c)}</td>` : ''}
               <td class="px-3 py-2 text-gray-400">${escapeHtml(c.dueDate || 'No due date')}</td>
               <td class="px-3 py-2"><span class="text-emerald-600">Done</span></td>
             </tr>
@@ -271,6 +299,30 @@ export function renderCalendarView() {
   const calRoot = document.getElementById('board-calendar-view');
   if (!calRoot) return;
 
+  const calendarAssigneesHtml = (card) => {
+    if (_boardAssignedMembers.length === 0) return '';
+    const assignees = Array.isArray(card.assignees) ? card.assignees : [];
+    if (!assignees.length) return '';
+
+    const profiles = assignees
+      .map((uid) => _boardAssignedMembers.find((m) => m.uid === uid))
+      .filter(Boolean);
+    if (!profiles.length) return '';
+
+    const bubbles = profiles.map((p) => {
+      const hoverName = p.displayName || `@${p.username || p.uid}`;
+      const altText = p.displayName ? `${p.displayName} (@${p.username || ''})` : `@${p.username || p.uid}`;
+      if (p.photoURL) {
+        return `<img src="${escapeHtml(p.photoURL)}" alt="${escapeHtml(altText)}" title="${escapeHtml(hoverName)}" class="w-5 h-5 rounded-full object-cover border border-sky-200 flex-shrink-0" />`;
+      }
+      const bg = _uidToColor(p.uid);
+      const initials = (p.displayName || p.username || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+      return `<span title="${escapeHtml(hoverName)}" class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold text-white flex-shrink-0" style="background:${bg}">${escapeHtml(initials)}</span>`;
+    }).join('');
+
+    return `<div class="mt-1.5 flex items-center gap-1 flex-wrap">${bubbles}</div>`;
+  };
+
   const byDate = new Map();
   _applyActiveFilters(_lastCards).forEach((c) => {
     if (!c.dueDate) return;
@@ -293,6 +345,7 @@ export function renderCalendarView() {
             ${byDate.get(d).map((c) => `
               <div class="rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5">
                 <p class="text-sm text-sky-900">${escapeHtml(c.title || '')}</p>
+                ${calendarAssigneesHtml(c)}
                 <div class="mt-1 h-1.5 rounded bg-sky-200 overflow-hidden">
                   <div class="h-full bg-sky-500" style="width:${c.completed ? '100' : '55'}%"></div>
                 </div>
@@ -1273,40 +1326,143 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   let editComments = Array.isArray(comments) ? [...comments] : [];
   // Pending new files chosen via file input
   let pendingFiles = [];
-    // Local mutable set of assigned UIDs (only relevant in edit mode)
-    let editAssignees = new Set(Array.isArray(assignees) ? assignees : []);
+  // Local mutable set of assigned UIDs (only relevant in edit mode)
+  let editAssignees = new Set(Array.isArray(assignees) ? assignees : []);
 
-    // ── Assignees helpers ──────────────────────────────────────────────────────
-    const _assigneesSectionInner = () => {
-      if (!isEdit || _boardAssignedMembers.length === 0) return '';
-      const rows = _boardAssignedMembers.map((p) => {
-        const checked = editAssignees.has(p.uid);
-        const bg      = _uidToColor(p.uid);
-        const initials = (p.displayName || p.username || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
-        const label   = p.displayName ? `${p.displayName} (@${p.username || ''})` : `@${p.username || p.uid}`;
-        return `
-          <label class="flex items-center gap-2.5 cursor-pointer py-1">
-            <input type="checkbox" class="modal-assignee-check rounded border-gray-300 text-brand-500 focus:ring-brand-400"
-              data-uid="${escapeHtml(p.uid)}" ${checked ? 'checked' : ''} />
-            <span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-bold text-white flex-shrink-0" style="background:${bg}">${escapeHtml(initials)}</span>
-            <span class="text-sm text-gray-700 truncate">${escapeHtml(label)}</span>
-          </label>`;
-      }).join('');
-      return `
-        <div class="flex items-center justify-between mb-1">
-          <p class="text-sm font-medium text-gray-700">Assignees</p>
-        </div>
-        <div id="modal-assignees-list" class="flex flex-col">${rows}</div>`;
-    };
+  // ── Assignees helpers ──────────────────────────────────────────────────────
+  const _memberInitials = (member) => {
+    const source = member?.displayName || member?.username || member?.email || '?';
+    return source.split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  };
 
-    const _bindAssigneeSectionEvents = () => {
-      document.querySelectorAll('.modal-assignee-check').forEach((chk) => {
-        chk.addEventListener('change', () => {
-          if (chk.checked) editAssignees.add(chk.dataset.uid);
-          else editAssignees.delete(chk.dataset.uid);
+  const _memberLabel = (member) => (
+    member?.displayName
+      ? `${member.displayName}${member.username ? ` (@${member.username})` : ''}`
+      : `@${member?.username || member?.uid || 'member'}`
+  );
+
+  const _memberAvatar = (member, sizeClass = 'w-7 h-7', textClass = 'text-[10px]') => {
+    const hoverName = member?.displayName || `@${member?.username || member?.uid || 'member'}`;
+    if (member?.photoURL) {
+      return `<img src="${escapeHtml(member.photoURL)}" alt="${escapeHtml(_memberLabel(member))}" title="${escapeHtml(hoverName)}" class="${sizeClass} rounded-full object-cover border border-white/25" />`;
+    }
+    const bg = _uidToColor(member?.uid || 'fallback');
+    return `<span class="inline-flex items-center justify-center ${sizeClass} rounded-full ${textClass} font-bold text-white" style="background:${bg}" title="${escapeHtml(hoverName)}">${escapeHtml(_memberInitials(member))}</span>`;
+  };
+
+  const _assignedProfiles = () => {
+    const selected = [...editAssignees]
+      .map((uid) => _boardAssignedMembers.find((m) => m.uid === uid))
+      .filter(Boolean);
+    selected.sort((a, b) => _memberLabel(a).toLowerCase().localeCompare(_memberLabel(b).toLowerCase()));
+    return selected;
+  };
+
+  const _assigneesSectionInner = () => {
+    if (!isEdit || _boardAssignedMembers.length === 0) return '';
+    const selected = _assignedProfiles();
+    return `
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-sm font-medium text-gray-700">Assignees</p>
+        <button type="button" id="modal-add-assignee-btn"
+          class="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
+          title="Add assignee">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        </button>
+      </div>
+      <div id="modal-assignees-picked" class="flex flex-wrap gap-2">
+        ${selected.length
+          ? selected.map((m) => `
+            <span class="relative inline-flex" title="${escapeHtml(_memberLabel(m))}">
+              ${_memberAvatar(m)}
+              <button type="button" class="modal-assignee-remove absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black/70 text-white text-[9px] leading-none hover:bg-red-600 transition-colors"
+                data-uid="${escapeHtml(m.uid)}" aria-label="Remove ${escapeHtml(_memberLabel(m))}">×</button>
+            </span>
+          `).join('')
+          : '<p class="text-xs text-gray-400">No assignees yet. Click + to add people.</p>'}
+      </div>`;
+  };
+
+  const _openAssigneePickerModal = () => {
+    const existing = document.getElementById('assignee-picker-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'assignee-picker-overlay';
+    overlay.className = 'fixed inset-0 bg-black/30 flex items-center justify-center z-[60] p-4';
+
+    const close = () => overlay.remove();
+
+    const render = (term = '') => {
+      const q = term.trim().toLowerCase();
+      const available = _boardAssignedMembers
+        .filter((m) => !editAssignees.has(m.uid))
+        .filter((m) => {
+          if (!q) return true;
+          const hay = `${m.displayName || ''} ${m.username || ''} ${m.email || ''}`.toLowerCase();
+          return hay.includes(q);
+        })
+        .sort((a, b) => _memberLabel(a).toLowerCase().localeCompare(_memberLabel(b).toLowerCase()));
+
+      overlay.innerHTML = `
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-md p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-sm font-semibold text-gray-800">Add Assignee</h4>
+            <button type="button" id="assignee-picker-close" class="text-gray-400 hover:text-gray-700">✕</button>
+          </div>
+          <input id="assignee-picker-search" type="text" value="${escapeHtml(term)}" placeholder="Search users by name or @username"
+            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500 mb-3" />
+          <div class="max-h-72 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+            ${available.length
+              ? available.map((m) => `
+                <button type="button" class="assignee-picker-add w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 text-left" data-uid="${escapeHtml(m.uid)}">
+                  <span class="flex items-center gap-2 min-w-0">
+                    ${_memberAvatar(m, 'w-6 h-6', 'text-[9px]')}
+                    <span class="text-sm text-gray-700 truncate">${escapeHtml(_memberLabel(m))}</span>
+                  </span>
+                  <span class="text-xs text-brand-600 font-medium">Add</span>
+                </button>
+              `).join('')
+              : '<p class="px-3 py-4 text-xs text-gray-400">No matching users.</p>'}
+          </div>
+        </div>`;
+
+      overlay.querySelector('#assignee-picker-close')?.addEventListener('click', close);
+      overlay.querySelector('#assignee-picker-search')?.addEventListener('input', (e) => render(e.target.value));
+      overlay.querySelectorAll('.assignee-picker-add').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          editAssignees.add(btn.dataset.uid);
+          _renderAssignees();
+          close();
         });
       });
     };
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+
+    document.body.appendChild(overlay);
+    render('');
+    overlay.querySelector('#assignee-picker-search')?.focus();
+  };
+
+  const _bindAssigneeSectionEvents = () => {
+    document.getElementById('modal-add-assignee-btn')?.addEventListener('click', _openAssigneePickerModal);
+    document.querySelectorAll('.modal-assignee-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        editAssignees.delete(btn.dataset.uid);
+        _renderAssignees();
+      });
+    });
+  };
+
+  const _renderAssignees = () => {
+    const section = document.getElementById('modal-assignees-section');
+    if (!section) return;
+    section.innerHTML = _assigneesSectionInner();
+    _bindAssigneeSectionEvents();
+  };
 
   const _subtaskRowHtml = (s) => `
     <li class="flex items-center gap-2 group" data-subtask-id="${escapeHtml(s.id)}">
@@ -1642,7 +1798,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   _bindSubtaskSectionEvents();
   _bindAttachmentSectionEvents();
   if (isEdit) _bindCommentEvents();
-    if (isEdit) _bindAssigneeSectionEvents();
+  if (isEdit) _bindAssigneeSectionEvents();
 
   const recurringCheckbox = document.getElementById('card-recurring');
   const recurrenceWrap = document.getElementById('card-recurrence-wrap');
@@ -1734,21 +1890,22 @@ function _buildAssigneeChips(assignees) {
     .map((uid) => _boardAssignedMembers.find((m) => m.uid === uid))
     .filter(Boolean);
   if (profiles.length === 0) return '';
-  const visible = profiles.slice(0, 3);
-  const overflow = profiles.length - visible.length;
+
   const initials = (p) => {
     const name = p.displayName || p.username || p.email || '?';
     return name.split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   };
-  const chips = visible.map((p) => {
+
+  const chips = profiles.map((p) => {
+    const hoverName = p.displayName || `@${p.username || p.uid}`;
+    const altText = p.displayName ? `${p.displayName} (@${p.username || ''})` : `@${p.username || p.uid}`;
+    if (p.photoURL) {
+      return `<img src="${escapeHtml(p.photoURL)}" alt="${escapeHtml(altText)}" class="w-5 h-5 rounded-full object-cover border border-white/25 flex-shrink-0" title="${escapeHtml(hoverName)}" />`;
+    }
     const bg = _uidToColor(p.uid);
-    const title = p.displayName ? `${p.displayName} (@${p.username || ''})` : `@${p.username || p.uid}`;
-    return `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold text-white flex-shrink-0" style="background:${bg}" title="${escapeHtml(title)}">${escapeHtml(initials(p))}</span>`;
+    return `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold text-white flex-shrink-0" style="background:${bg}" title="${escapeHtml(hoverName)}">${escapeHtml(initials(p))}</span>`;
   }).join('');
-  const overflowHtml = overflow > 0
-    ? `<span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-bold bg-white/20 text-white/70 flex-shrink-0">+${overflow}</span>`
-    : '';
-  return `<div class="flex items-center gap-0.5 mt-1.5">${chips}${overflowHtml}</div>`;
+  return `<div class="flex items-center gap-0.5 mt-1.5 flex-wrap">${chips}</div>`;
 }
 
 /** Deterministic color from a UID string for assignee bubbles. */
@@ -1769,6 +1926,10 @@ let _boardAssignedMembers = [];
  */
 export function setBoardAssignedMembers(profiles) {
   _boardAssignedMembers = Array.isArray(profiles) ? profiles : [];
+}
+
+export function getBoardAssignedMembers() {
+  return [..._boardAssignedMembers];
 }
 
 function _formatRecurrenceFrequency(value) {

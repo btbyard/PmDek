@@ -369,11 +369,7 @@
 #boards-view > main,
 #board-view > main,
 #ai-dashboard-view > main,
-#organizations-view > main,
-#boards-view > header,
-#board-view > header,
-#ai-dashboard-view > header,
-#organizations-view > header {
+#organizations-view > main {
   padding-right: var(--ai-chat-inset);
   transition: padding-right 220ms ease;
 }
@@ -430,6 +426,7 @@ body.ai-chat-resizing {
 }
 
 #ai-chat-sidebar.ai-chat-collapsed #ai-chat-messages,
+#ai-chat-sidebar.ai-chat-collapsed #ai-chat-tabs,
 #ai-chat-sidebar.ai-chat-collapsed .border-t.border-gray-200.p-3.bg-white.flex-shrink-0,
 #ai-chat-sidebar.ai-chat-collapsed #ai-chat-usage,
 #ai-chat-sidebar.ai-chat-collapsed #ai-chat-close-btn {
@@ -486,11 +483,7 @@ body.ai-chat-resizing {
   #boards-view > main,
   #board-view > main,
   #ai-dashboard-view > main,
-  #organizations-view > main,
-  #boards-view > header,
-  #board-view > header,
-  #ai-dashboard-view > header,
-  #organizations-view > header {
+  #organizations-view > main {
     padding-right: 0 !important;
   }
 

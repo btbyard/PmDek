@@ -26,6 +26,11 @@ if (!admin.apps.length) {
   admin.initializeApp();
 }
 
+function _isBootstrapAdminEmail(email) {
+  const normalized = String(email || '').toLowerCase().trim();
+  return ['bradster8@yahoo.com'].includes(normalized);
+}
+
 function _getStripe() {
   const key = STRIPE_SECRET_KEY.value();
   if (!key) throw new HttpsError('failed-precondition', 'Stripe is not configured (missing STRIPE_SECRET_KEY).');
@@ -354,11 +359,16 @@ exports.setUserAsAdmin = onCall({
     throw new HttpsError('invalid-argument', 'email is required.');
   }
 
-  // Verify caller is an admin
+  // Verify caller is an admin (profile admin or bootstrap email)
   if (callerUid) {
+    const callerEmail = request.auth?.token?.email;
+    if (_isBootstrapAdminEmail(callerEmail)) {
+      // Bootstrap admins can grant admin access before profile flags are set.
+    } else {
     const callerDoc = await admin.firestore().collection('users').doc(callerUid).get();
     if (!callerDoc.exists || !callerDoc.data().isAdmin) {
       throw new HttpsError('permission-denied', 'Only admins can set other admins.');
+    }
     }
   }
 

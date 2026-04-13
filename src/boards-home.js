@@ -7,11 +7,10 @@
  * in the top-right that opens a rename modal. Clicking the card body opens the board.
  */
 
-import { getUserBoards, getCardStatsByUserId, createBoard, renameBoard, updateBoardColor, deleteBoard, archiveBoard, unarchiveBoard, DEFAULT_COLUMNS, setBoardId, DECK_COLORS, PROJECT_TYPES, getDefaultColumnsForProjectType } from './board.js';
+import { getUserBoards, getOrgBoards, getCardStatsByBoardIds, createBoard, renameBoard, updateBoardColor, deleteBoard, archiveBoard, unarchiveBoard, setBoardId, DECK_COLORS, PROJECT_TYPES, getDefaultColumnsForProjectType } from './board.js';
 import { generateBoard, generateBoardWithTasks }            from './ai.js';
 import { createCard, updateAllCardsBackground, setCurrentUser } from './cards.js';
-import { getUserProfile }                                   from './users.js';
-import { getOrgMembers }                                    from './org.js';
+import { getOrgMembers, getUserOrganizations, getOrgById } from './org.js';
 import { getEffectiveUserPlan, BILLING_PLANS }              from './billing.js';
 
 // Store the refresh callback so the rename modal can refresh the grid after saving.
@@ -20,7 +19,8 @@ let _currentUser = null;
 let _lastBoards = [];
 /** @type {Map<string, {taskCount: number, subtaskCount: number}>} */
 let _lastStats = new Map();
-let _activeTab = 'current'; // 'current' | 'archived'
+let _activeTab = 'my'; // 'my' | 'org' | 'archived'
+let _hasOrganizations = false;
 let _tabsInited = false;
 const BOARDS_LOAD_TIMEOUT_MS = 7000;
 const BOARD_WRITE_TIMEOUT_MS = 7000;
@@ -49,15 +49,49 @@ export async function renderBoardsHome(user, onBoardOpen) {
   }
 
   try {
-    const [boards, stats] = await Promise.all([
-      _withTimeout(getUserBoards(user.uid), BOARDS_LOAD_TIMEOUT_MS, 'Loading boards took too long.'),
-      getCardStatsByUserId(user.uid).catch(() => new Map()),
-    ]);
-    _lastBoards = boards;
+    const orgs = await getUserOrganizations(user.uid).catch(() => []);
+    const orgIds = orgs.map((org) => org.id).filter(Boolean);
+    const orgCanManageSet = new Set(
+      orgs
+        .filter((org) => org?.ownerId === user.uid || (Array.isArray(org?.admins) && org.admins.includes(user.uid)))
+        .map((org) => org.id)
+    );
+    _hasOrganizations = orgIds.length > 0;
+    if (!_hasOrganizations && _activeTab === 'org') _activeTab = 'my';
+    _updateTabUI();
+
+    const myBoards = await _withTimeout(getUserBoards(user.uid), BOARDS_LOAD_TIMEOUT_MS, 'Loading decks took too long.');
+
+    let rawOrgBoards = [];
+    let orgBoardsLoadFailed = false;
+    if (orgIds.length > 0) {
+      try {
+        rawOrgBoards = await getOrgBoards(orgIds);
+      } catch (err) {
+        orgBoardsLoadFailed = true;
+        console.error('Load organization decks failed:', err);
+      }
+    }
+
+    const orgBoards = rawOrgBoards.filter((board) => board.userId !== user.uid);
+    const mergedBoards = [
+      ...myBoards,
+      ...orgBoards,
+    ].map((board) => ({
+      ...board,
+      canEditDeckSettings: board.userId === user.uid || (board.visibility === 'org' && orgCanManageSet.has(board.orgId)),
+    }));
+
+    const stats = await getCardStatsByBoardIds(mergedBoards.map((board) => board.id)).catch(() => new Map());
+
+    _lastBoards = mergedBoards;
     _lastStats  = stats;
-    _persistBoards(user.uid, boards);
+    _persistBoards(user.uid, mergedBoards);
     _persistStats(user.uid, stats);
-    _renderTiles(root, boards);
+    _renderTiles(root, mergedBoards);
+    if (orgBoardsLoadFailed) {
+      _renderBoardsNotice(root, 'Organization decks could not be loaded. Please refresh and verify this user is listed in organization members.');
+    }
   } catch (err) {
     console.error('Load boards failed:', err);
 
@@ -77,15 +111,17 @@ export async function openCreateBoardModal(user, onCreated) {
   const DEFAULT_COLOR = '#111827';
 
   // Load org context to determine if visibility selector should appear
-  let orgMembers = [];
-  let userOrgId  = null;
+  let userOrganizations = [];
+  let orgMembersById = new Map();
   try {
-    const profile = await getUserProfile(user.uid);
-    if (profile?.organizationId) {
-      userOrgId  = profile.organizationId;
-      orgMembers = await getOrgMembers(profile.organizationId);
-    }
+    userOrganizations = await getUserOrganizations(user.uid);
+    const membersPairs = await Promise.all(
+      userOrganizations.map(async (org) => [org.id, await getOrgMembers(org.id)])
+    );
+    orgMembersById = new Map(membersPairs);
   } catch (_) { /* non-blocking — org features simply won't appear */ }
+
+  const defaultOrgId = userOrganizations[0]?.id || null;
 
   const swatchesHtml = [
     { value: DEFAULT_COLOR, label: 'Default' },
@@ -157,7 +193,7 @@ export async function openCreateBoardModal(user, onCreated) {
               </div>
             </div>
           </div>
-          ${userOrgId ? `
+          ${userOrganizations.length > 0 ? `
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1" for="board-visibility-input">
               Visibility
@@ -165,22 +201,30 @@ export async function openCreateBoardModal(user, onCreated) {
             <select id="board-visibility-input"
               class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
               <option value="private">Myself</option>
-              <option value="org">My Organization</option>
+              <option value="org">Visible to organization</option>
             </select>
+          </div>
+          <div id="board-org-select-wrap" class="hidden">
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="board-org-input">
+              Organization
+            </label>
+            <select id="board-org-input"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+              ${userOrganizations.map((org) => `<option value="${org.id}">${escapeHtml(org.name || 'Organization')}</option>`).join('')}
+            </select>
+          </div>
+          <div id="board-owner-wrap" class="hidden">
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="board-owner-input">
+              Project Deck Owner
+            </label>
+            <select id="board-owner-input"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500"></select>
           </div>
           <div id="board-member-assign-wrap" class="hidden">
             <label class="block text-sm font-medium text-gray-700 mb-1">
               Assign Organization Members
             </label>
-            <div class="max-h-28 overflow-y-auto rounded-lg border border-gray-200 p-2 space-y-1">
-              ${orgMembers.map((m) => `
-                <label class="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" class="board-member-check rounded border-gray-300 text-brand-500 focus:ring-brand-400"
-                    value="${m.uid}" />
-                  <span class="text-xs text-gray-700">${m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`}</span>
-                </label>
-              `).join('')}
-            </div>
+            <div id="board-member-list" class="max-h-28 overflow-y-auto rounded-lg border border-gray-200 p-2 space-y-1"></div>
           </div>
           ` : ''}
           <div>
@@ -286,12 +330,47 @@ export async function openCreateBoardModal(user, onCreated) {
   });
 
   const visibilitySelect = document.getElementById('board-visibility-input');
+  const orgSelect = document.getElementById('board-org-input');
+  const ownerSelect = document.getElementById('board-owner-input');
+  const ownerWrap = document.getElementById('board-owner-wrap');
+  const orgSelectWrap = document.getElementById('board-org-select-wrap');
   const memberWrap = document.getElementById('board-member-assign-wrap');
-  if (visibilitySelect && memberWrap) {
+  const memberList = document.getElementById('board-member-list');
+
+  const renderOrgPeople = (orgId) => {
+    if (!memberList || !ownerSelect) return;
+    const rawMembers = orgMembersById.get(orgId) || [];
+    const members = _withCurrentUserFirst(rawMembers, user);
+
+    ownerSelect.innerHTML = members.map((m) => `
+      <option value="${m.uid}">${escapeHtml(_formatMemberLabel(m, user.uid))}</option>
+    `).join('');
+
+    ownerSelect.value = members.some((m) => m.uid === user.uid)
+      ? user.uid
+      : (members[0]?.uid || '');
+
+    memberList.innerHTML = members.map((m) => `
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" class="board-member-check rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+          value="${m.uid}" />
+        <span class="text-xs text-gray-700">${escapeHtml(_formatMemberLabel(m, user.uid))}</span>
+      </label>
+    `).join('');
+  };
+
+  if (visibilitySelect && memberWrap && ownerWrap && orgSelectWrap) {
     const syncMemberVisibility = () => {
-      memberWrap.classList.toggle('hidden', visibilitySelect.value !== 'org');
+      const isOrgVisible = visibilitySelect.value === 'org';
+      memberWrap.classList.toggle('hidden', !isOrgVisible);
+      ownerWrap.classList.toggle('hidden', !isOrgVisible);
+      orgSelectWrap.classList.toggle('hidden', !isOrgVisible);
+      if (isOrgVisible) {
+        renderOrgPeople(orgSelect?.value || defaultOrgId);
+      }
     };
     visibilitySelect.addEventListener('change', syncMemberVisibility);
+    orgSelect?.addEventListener('change', () => renderOrgPeople(orgSelect.value));
     syncMemberVisibility();
   }
 
@@ -322,15 +401,21 @@ export async function openCreateBoardModal(user, onCreated) {
     const dueDate = document.getElementById('board-due-date-input')?.value || null;
     const color   = document.getElementById('board-color-value')?.value || null;
     const visibility = document.getElementById('board-visibility-input')?.value || 'private';
-    const assignedMembers = visibility === 'org'
+    const selectedOrgId = visibility === 'org' ? (orgSelect?.value || defaultOrgId) : null;
+    const projectDeckOwnerId = visibility === 'org' ? (ownerSelect?.value || user.uid) : null;
+    let assignedMembers = visibility === 'org'
       ? [...document.querySelectorAll('.board-member-check:checked')].map((el) => el.value)
       : [];
+    if (visibility === 'org' && projectDeckOwnerId && !assignedMembers.includes(projectDeckOwnerId)) {
+      assignedMembers = [projectDeckOwnerId, ...assignedMembers];
+    }
     try {
       const boardId = await _withTimeout(
         createBoard(user, title, defaultCols, dueDate || null, color || null, projectType, {
           visibility,
-          orgId: visibility === 'org' ? (userOrgId || null) : null,
+          orgId: selectedOrgId || null,
           assignedMembers,
+          projectDeckOwnerId,
         }),
         BOARD_WRITE_TIMEOUT_MS,
         'Creating the board took too long.',
@@ -343,9 +428,12 @@ export async function openCreateBoardModal(user, onCreated) {
         dueDate: dueDate || null,
         color:   color || null,
         visibility,
-        orgId: visibility === 'org' ? (userOrgId || null) : null,
+        orgId: selectedOrgId || null,
         assignedMembers,
+        projectDeckOwnerId,
+        canEditDeckSettings: true,
       };
+      _activeTab = visibility === 'org' ? 'org' : 'my';
       _upsertCachedBoard(board);
       _persistCurrentBoards();
       if (projectType === 'weekly') {
@@ -498,7 +586,14 @@ function _initTabs() {
   _tabsInited = true;
 
   document.getElementById('tab-current-btn')?.addEventListener('click', () => {
-    _activeTab = 'current';
+    _activeTab = 'my';
+    _updateTabUI();
+    const root = document.getElementById('boards-root');
+    if (root) _renderTiles(root, _lastBoards);
+  });
+
+  document.getElementById('tab-org-btn')?.addEventListener('click', () => {
+    _activeTab = 'org';
     _updateTabUI();
     const root = document.getElementById('boards-root');
     if (root) _renderTiles(root, _lastBoards);
@@ -514,15 +609,28 @@ function _initTabs() {
 
 function _updateTabUI() {
   const currentBtn  = document.getElementById('tab-current-btn');
+  const orgBtn      = document.getElementById('tab-org-btn');
   const archivedBtn = document.getElementById('tab-archived-btn');
   const actionBtns  = document.getElementById('boards-action-btns');
+
+  if (orgBtn) orgBtn.classList.toggle('hidden', !_hasOrganizations);
 
   const activeClass   = ['border-brand-500', 'text-brand-600'];
   const inactiveClass = ['border-transparent', 'text-gray-500', 'hover:text-gray-700'];
 
-  if (_activeTab === 'current') {
+  if (_activeTab === 'my') {
     currentBtn?.classList.add(...activeClass);
     currentBtn?.classList.remove(...inactiveClass);
+    orgBtn?.classList.remove(...activeClass);
+    orgBtn?.classList.add(...inactiveClass);
+    archivedBtn?.classList.remove(...activeClass);
+    archivedBtn?.classList.add(...inactiveClass);
+    if (actionBtns) actionBtns.style.visibility = '';
+  } else if (_activeTab === 'org') {
+    orgBtn?.classList.add(...activeClass);
+    orgBtn?.classList.remove(...inactiveClass);
+    currentBtn?.classList.remove(...activeClass);
+    currentBtn?.classList.add(...inactiveClass);
     archivedBtn?.classList.remove(...activeClass);
     archivedBtn?.classList.add(...inactiveClass);
     if (actionBtns) actionBtns.style.visibility = '';
@@ -531,6 +639,8 @@ function _updateTabUI() {
     archivedBtn?.classList.remove(...inactiveClass);
     currentBtn?.classList.remove(...activeClass);
     currentBtn?.classList.add(...inactiveClass);
+    orgBtn?.classList.remove(...activeClass);
+    orgBtn?.classList.add(...inactiveClass);
     if (actionBtns) actionBtns.style.visibility = 'hidden';
   }
 }
@@ -633,21 +743,34 @@ function _updateColorFilterUI(container, btn, popup) {
 function _renderTiles(root, boards, { instant = false } = {}) {
   root.innerHTML = '';
 
-  const filtered = boards.filter((b) =>
-    (_activeTab === 'archived' ? b.archived === true : !b.archived)
-  );
+  const filtered = boards.filter((b) => {
+    if (_activeTab === 'archived') return b.archived === true;
+    if (_activeTab === 'org') return b.archived !== true && b.visibility === 'org';
+    return b.archived !== true && b.visibility !== 'org';
+  });
 
   if (filtered.length === 0) {
-    root.innerHTML = _activeTab === 'archived'
-      ? `<div class="flex flex-col items-center justify-center py-20 text-center">
-          <div class="text-5xl mb-4">🗄️</div>
-          <p class="text-gray-500 text-sm">No archived decks.</p>
-        </div>`
-      : `<div class="flex flex-col items-center justify-center py-20 text-center">
-          <div class="text-5xl mb-4">📋</div>
-          <p class="text-gray-500 text-sm">No boards yet.</p>
-          <p class="text-gray-400 text-sm">Click <strong>Create Deck</strong> to get started.</p>
-        </div>`;
+    if (_activeTab === 'archived') {
+      root.innerHTML = `<div class="flex flex-col items-center justify-center py-20 text-center">
+        <div class="text-5xl mb-4">🗄️</div>
+        <p class="text-gray-500 text-sm">No archived decks.</p>
+      </div>`;
+      return;
+    }
+
+    if (_activeTab === 'org') {
+      root.innerHTML = `<div class="flex flex-col items-center justify-center py-20 text-center">
+        <div class="text-5xl mb-4">🏢</div>
+        <p class="text-gray-500 text-sm">No organization decks shared with you yet.</p>
+      </div>`;
+      return;
+    }
+
+    root.innerHTML = `<div class="flex flex-col items-center justify-center py-20 text-center">
+      <div class="text-5xl mb-4">📋</div>
+      <p class="text-gray-500 text-sm">No decks yet.</p>
+      <p class="text-gray-400 text-sm">Click <strong>Create Deck</strong> to get started.</p>
+    </div>`;
     return;
   }
 
@@ -816,7 +939,7 @@ function _buildCard(board, index = 0, instant = false, stats = null) {
   wrapper.appendChild(backLayer2);
   wrapper.appendChild(backLayer1);
   wrapper.appendChild(card);
-  wrapper.appendChild(gear);
+  if (board.canEditDeckSettings) wrapper.appendChild(gear);
 
   if (!instant) {
     requestAnimationFrame(() => {
@@ -953,15 +1076,21 @@ async function _openRenameBoardModal(board) {
   const modalRoot = document.getElementById('modal-root');
 
   // Load org context for visibility selector
-  let orgMembers = [];
-  let userOrgId  = null;
+  let userOrganizations = [];
+  let orgMembersById = new Map();
   try {
-    const profile = await getUserProfile(_currentUser.uid);
-    if (profile?.organizationId) {
-      userOrgId  = profile.organizationId;
-      orgMembers = await getOrgMembers(profile.organizationId);
+    userOrganizations = await getUserOrganizations(_currentUser.uid);
+    if (board.orgId && !userOrganizations.some((org) => org.id === board.orgId)) {
+      const boardOrg = await getOrgById(board.orgId);
+      if (boardOrg) userOrganizations.push(boardOrg);
     }
+    const membersPairs = await Promise.all(
+      userOrganizations.map(async (org) => [org.id, await getOrgMembers(org.id)])
+    );
+    orgMembersById = new Map(membersPairs);
   } catch (_) { /* non-blocking */ }
+
+  const defaultOrgId = board.orgId || userOrganizations[0]?.id || null;
 
   const currentVisibility = board.visibility || 'private';
   const currentAssigned = board.assignedMembers || [];
@@ -986,7 +1115,7 @@ async function _openRenameBoardModal(board) {
               value="${board.dueDate || ''}"
               class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
           </div>
-          ${userOrgId ? `
+          ${userOrganizations.length > 0 ? `
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1" for="edit-board-visibility-input">
               Visibility
@@ -994,22 +1123,30 @@ async function _openRenameBoardModal(board) {
             <select id="edit-board-visibility-input"
               class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
               <option value="private" ${currentVisibility === 'private' ? 'selected' : ''}>Myself</option>
-              <option value="org" ${currentVisibility === 'org' ? 'selected' : ''}>My Organization</option>
+              <option value="org" ${currentVisibility === 'org' ? 'selected' : ''}>Visible to organization</option>
             </select>
+          </div>
+          <div id="edit-board-org-select-wrap" class="${currentVisibility === 'org' ? '' : 'hidden'}">
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="edit-board-org-input">
+              Organization
+            </label>
+            <select id="edit-board-org-input"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+              ${userOrganizations.map((org) => `<option value="${org.id}" ${(org.id === defaultOrgId) ? 'selected' : ''}>${escapeHtml(org.name || 'Organization')}</option>`).join('')}
+            </select>
+          </div>
+          <div id="edit-board-owner-wrap" class="${currentVisibility === 'org' ? '' : 'hidden'}">
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="edit-board-owner-input">
+              Project Deck Owner
+            </label>
+            <select id="edit-board-owner-input"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500"></select>
           </div>
           <div id="edit-board-member-assign-wrap" class="${currentVisibility === 'org' ? '' : 'hidden'}">
             <label class="block text-sm font-medium text-gray-700 mb-1">
               Assign Organization Members
             </label>
-            <div class="max-h-28 overflow-y-auto rounded-lg border border-gray-200 p-2 space-y-1">
-              ${orgMembers.map((m) => `
-                <label class="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" class="edit-board-member-check rounded border-gray-300 text-brand-500 focus:ring-brand-400"
-                    value="${m.uid}" ${currentAssigned.includes(m.uid) ? 'checked' : ''} />
-                  <span class="text-xs text-gray-700">${m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`}</span>
-                </label>
-              `).join('')}
-            </div>
+            <div id="edit-board-member-list" class="max-h-28 overflow-y-auto rounded-lg border border-gray-200 p-2 space-y-1"></div>
           </div>
           ` : ''}
           <div class="flex justify-end gap-2">
@@ -1040,10 +1177,50 @@ async function _openRenameBoardModal(board) {
 
   // Wire visibility toggle
   const editVisSelect = document.getElementById('edit-board-visibility-input');
+  const editOrgSelect = document.getElementById('edit-board-org-input');
+  const editOwnerSelect = document.getElementById('edit-board-owner-input');
+  const editOwnerWrap = document.getElementById('edit-board-owner-wrap');
+  const editOrgWrap = document.getElementById('edit-board-org-select-wrap');
   const editMemberWrap = document.getElementById('edit-board-member-assign-wrap');
-  if (editVisSelect && editMemberWrap) {
-    const syncVis = () => editMemberWrap.classList.toggle('hidden', editVisSelect.value !== 'org');
+  const editMemberList = document.getElementById('edit-board-member-list');
+
+  const renderEditOrgPeople = (orgId) => {
+    if (!editMemberList || !editOwnerSelect) return;
+    const rawMembers = orgMembersById.get(orgId) || [];
+    const members = _withCurrentUserFirst(rawMembers, _currentUser);
+
+    editOwnerSelect.innerHTML = members.map((m) => `
+      <option value="${m.uid}">${escapeHtml(_formatMemberLabel(m, _currentUser.uid))}</option>
+    `).join('');
+
+    const currentOwner = board.projectDeckOwnerId;
+    editOwnerSelect.value = members.some((m) => m.uid === currentOwner)
+      ? currentOwner
+      : (members.some((m) => m.uid === _currentUser.uid) ? _currentUser.uid : (members[0]?.uid || ''));
+
+    editMemberList.innerHTML = members.map((m) => `
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" class="edit-board-member-check rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+          value="${m.uid}" ${currentAssigned.includes(m.uid) ? 'checked' : ''} />
+        <span class="text-xs text-gray-700">${escapeHtml(_formatMemberLabel(m, _currentUser.uid))}</span>
+      </label>
+    `).join('');
+  };
+
+  if (editVisSelect && editMemberWrap && editOwnerWrap && editOrgWrap) {
+    const syncVis = () => {
+      const isOrgVisible = editVisSelect.value === 'org';
+      editMemberWrap.classList.toggle('hidden', !isOrgVisible);
+      editOwnerWrap.classList.toggle('hidden', !isOrgVisible);
+      editOrgWrap.classList.toggle('hidden', !isOrgVisible);
+      if (isOrgVisible) {
+        renderEditOrgPeople(editOrgSelect?.value || defaultOrgId);
+      }
+    };
     editVisSelect.addEventListener('change', syncVis);
+    editOrgSelect?.addEventListener('change', () => renderEditOrgPeople(editOrgSelect.value));
+    if (editOrgSelect && defaultOrgId) editOrgSelect.value = defaultOrgId;
+    syncVis();
   }
 
   _bindModalSubmitKeys(form);
@@ -1055,17 +1232,24 @@ async function _openRenameBoardModal(board) {
     if (!newTitle) return;
 
     const visibility = document.getElementById('edit-board-visibility-input')?.value || 'private';
-    const assignedMembers = visibility === 'org'
+    const selectedOrgId = visibility === 'org' ? (editOrgSelect?.value || defaultOrgId) : null;
+    const projectDeckOwnerId = visibility === 'org' ? (editOwnerSelect?.value || _currentUser.uid) : null;
+    let assignedMembers = visibility === 'org'
       ? [...document.querySelectorAll('.edit-board-member-check:checked')].map((el) => el.value)
       : [];
+    if (visibility === 'org' && projectDeckOwnerId && !assignedMembers.includes(projectDeckOwnerId)) {
+      assignedMembers = [projectDeckOwnerId, ...assignedMembers];
+    }
 
     try {
       await renameBoard(board.id, newTitle, newDueDate, {
         visibility,
-        orgId: visibility === 'org' ? (userOrgId || null) : null,
+        orgId: selectedOrgId || null,
         assignedMembers,
+        projectDeckOwnerId,
       });
-      _upsertCachedBoard({ ...board, title: newTitle, dueDate: newDueDate, visibility, orgId: visibility === 'org' ? (userOrgId || null) : null, assignedMembers });
+      _activeTab = visibility === 'org' ? 'org' : 'my';
+      _upsertCachedBoard({ ...board, title: newTitle, dueDate: newDueDate, visibility, orgId: selectedOrgId || null, assignedMembers, projectDeckOwnerId, canEditDeckSettings: true });
       _persistCurrentBoards();
       close();
       await renderBoardsHome(_currentUser, _onBoardOpen);
@@ -1294,7 +1478,7 @@ async function _doRestoreBoard(board) {
     await unarchiveBoard(board.id);
     _upsertCachedBoard({ ...board, archived: false });
     _persistCurrentBoards();
-    _activeTab = 'current';
+    _activeTab = 'my';
     await renderBoardsHome(_currentUser, _onBoardOpen);
   } catch (err) {
     console.error('Restore board failed:', err);
@@ -1302,6 +1486,38 @@ async function _doRestoreBoard(board) {
 }
 
 // ─── Utility ─────────────────────────────────────────────────────────────────
+
+function _withCurrentUserFirst(members, user) {
+  const unique = [];
+  const seen = new Set();
+  (Array.isArray(members) ? members : []).forEach((m) => {
+    if (!m?.uid || seen.has(m.uid)) return;
+    seen.add(m.uid);
+    unique.push(m);
+  });
+
+  if (user?.uid && !seen.has(user.uid)) {
+    unique.unshift({ uid: user.uid, displayName: user.displayName || '', username: '' });
+  }
+
+  unique.sort((a, b) => {
+    if (a.uid === user?.uid) return -1;
+    if (b.uid === user?.uid) return 1;
+    const aName = (a.displayName || a.username || a.uid || '').toLowerCase();
+    const bName = (b.displayName || b.username || b.uid || '').toLowerCase();
+    return aName.localeCompare(bName);
+  });
+
+  return unique;
+}
+
+function _formatMemberLabel(member, currentUid) {
+  if (!member) return 'Unknown User';
+  const base = member.displayName
+    ? `${member.displayName}${member.username ? ` (@${member.username})` : ''}`
+    : `@${member.username || member.uid}`;
+  return member.uid === currentUid ? `${base} (You)` : base;
+}
 
 function escapeHtml(str) {
   return String(str)
@@ -1352,6 +1568,11 @@ function _persistBoards(userId, boards) {
       archived: board.archived || false,
       dueDate:  board.dueDate || null,
       color:    board.color || null,
+      visibility: board.visibility || 'private',
+      orgId: board.orgId || null,
+      assignedMembers: Array.isArray(board.assignedMembers) ? board.assignedMembers : [],
+      projectDeckOwnerId: board.projectDeckOwnerId || null,
+      boardScope: board.boardScope || 'my',
     }));
     window.localStorage.setItem(_getBoardsStorageKey(userId), JSON.stringify(payload));
   } catch {
@@ -1367,7 +1588,12 @@ function _loadPersistedBoards(userId) {
     const boards = JSON.parse(raw);
     if (!Array.isArray(boards)) return [];
 
-    return boards.filter((board) => board && typeof board.id === 'string');
+    return boards
+      .filter((board) => board && typeof board.id === 'string')
+      .map((board) => ({
+        ...board,
+        visibility: board.visibility || 'private',
+      }));
   } catch {
     return [];
   }

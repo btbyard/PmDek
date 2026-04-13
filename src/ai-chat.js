@@ -11,12 +11,14 @@
 
 import { generateBoardWithTasks, generateCard } from './ai.js';
 import { createBoard, setBoardId, PROJECT_TYPES, getDefaultColumnsForProjectType } from './board.js';
-import { createCard, setCurrentUser, updateCard, getCardsSnapshot } from './cards.js';
+import { createCard, setCurrentUser, updateCard, getCardsSnapshot, getBoardAssignedMembers } from './cards.js';
 import { getAiUsageSummary, consumeAiCredit } from './billing.js';
+import { detectOpenProjectIntent, detectRequestedAnalysisFields, getOpenProjectQuestionSuggestions } from './open-project-intents.js';
 
 const HISTORY_KEY_PREFIX = 'aiChatHistory';
 const PIN_KEY_PREFIX = 'aiChatPinned';
 const WIDTH_KEY_PREFIX = 'aiChatWidth';
+const TAB_KEY_PREFIX = 'aiChatTab';
 const MAX_HISTORY = 100;
 
 function _key(prefix) {
@@ -25,6 +27,7 @@ function _key(prefix) {
 
 let _user           = null;
 let _mode           = 'boards'; // 'boards' | 'board' | 'dashboard'
+let _activeTab      = 'create'; // 'create' | 'project'
 let _onBoardCreated = null;     // callback(boardId, boardObj)
 let _submitting     = false;
 let _isResizing     = false;
@@ -68,6 +71,11 @@ export function initAiChat(user, { onBoardCreated } = {}) {
       setAiChatPinned(!sidebar.classList.contains('ai-chat-pinned'));
     });
 
+  document.getElementById('ai-chat-tab-create')
+    ?.addEventListener('click', () => _setChatTab('create'));
+  document.getElementById('ai-chat-tab-project')
+    ?.addEventListener('click', () => _setChatTab('project'));
+
   const form = document.getElementById('ai-chat-form');
   if (form) {
     form.addEventListener('submit', _handleSend);
@@ -80,7 +88,7 @@ export function initAiChat(user, { onBoardCreated } = {}) {
     });
   }
 
-  _renderHistory();
+  _setChatTab(_readSavedTab(), { persist: false });
   _refreshUsageBadge();
   setAiChatPinned(_readPinned(), { persist: false, focusInput: false });
 
@@ -95,15 +103,7 @@ export function initAiChat(user, { onBoardCreated } = {}) {
  */
 export function setAiChatMode(mode) {
   _mode = mode;
-  const input = document.getElementById('ai-chat-input');
-  if (!input) return;
-  if (mode === 'boards') {
-    input.placeholder = 'Describe a project to create a full deck…';
-  } else if (mode === 'dashboard') {
-    input.placeholder = 'Ask about risks, priorities, capacity, or delivery forecast…';
-  } else {
-    input.placeholder = 'Describe a task to add to the board…';
-  }
+  _syncInputPlaceholder();
   _refreshUsageBadge();
 }
 
@@ -308,7 +308,7 @@ function _syncChatHeader() {
   btn.innerHTML = collapsed
     ? '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>'
     : '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>';
-  title.textContent = collapsed ? 'AI' : 'AI Assistant';
+  title.textContent = collapsed ? 'Dealer' : 'AI Dealer';
 
   if (pinBtn) {
     pinBtn.title = pinned ? 'Unpin AI chat' : 'Pin AI chat open';
@@ -347,6 +347,51 @@ function _syncLayoutInset() {
   document.body.classList.toggle('ai-chat-open', nonMobile && visible && expanded);
 }
 
+function _readSavedTab() {
+  const saved = localStorage.getItem(_key(TAB_KEY_PREFIX));
+  return saved === 'project' ? 'project' : 'create';
+}
+
+function _setChatTab(tab, { persist = true } = {}) {
+  const next = tab === 'project' ? 'project' : 'create';
+  _activeTab = next;
+  if (persist) localStorage.setItem(_key(TAB_KEY_PREFIX), next);
+
+  const createBtn = document.getElementById('ai-chat-tab-create');
+  const projectBtn = document.getElementById('ai-chat-tab-project');
+  const setActive = (btn, active) => {
+    if (!btn) return;
+    btn.classList.toggle('bg-amber-100', active);
+    btn.classList.toggle('text-amber-900', active);
+    btn.classList.toggle('border-amber-200', active);
+    btn.classList.toggle('text-gray-600', !active);
+    btn.classList.toggle('border-gray-200', !active);
+  };
+  setActive(createBtn, next === 'create');
+  setActive(projectBtn, next === 'project');
+
+  _syncInputPlaceholder();
+  _renderHistory();
+}
+
+function _syncInputPlaceholder() {
+  const input = document.getElementById('ai-chat-input');
+  if (!input) return;
+
+  if (_activeTab === 'project') {
+    input.placeholder = 'Ask about risks, priorities, blockers, and forecast…';
+    return;
+  }
+
+  if (_mode === 'boards') {
+    input.placeholder = 'Describe a project to create a full deck…';
+  } else if (_mode === 'dashboard') {
+    input.placeholder = 'Describe a task to add to the current deck…';
+  } else {
+    input.placeholder = 'Describe a task to add to the board…';
+  }
+}
+
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 function _setButtonsActive(active) {
@@ -367,14 +412,14 @@ function _setButtonsActive(active) {
 
 function _loadHistory() {
   try {
-    return JSON.parse(localStorage.getItem(_key(HISTORY_KEY_PREFIX)) ?? '[]');
+    return JSON.parse(localStorage.getItem(_key(`${HISTORY_KEY_PREFIX}:${_activeTab}`)) ?? '[]');
   } catch {
     return [];
   }
 }
 
 function _saveHistory(messages) {
-  localStorage.setItem(_key(HISTORY_KEY_PREFIX), JSON.stringify(messages.slice(-MAX_HISTORY)));
+  localStorage.setItem(_key(`${HISTORY_KEY_PREFIX}:${_activeTab}`), JSON.stringify(messages.slice(-MAX_HISTORY)));
 }
 
 function _addToHistory(role, text) {
@@ -402,16 +447,31 @@ function _renderHistory() {
 }
 
 function _showEmpty(container) {
-  container.innerHTML = `
-    <div id="ai-chat-empty" class="flex flex-col items-center justify-center h-full text-center px-6 py-8">
-      <span class="text-5xl mb-3 select-none">✨</span>
-      <p class="text-sm font-semibold text-gray-600 mb-1">AI Assistant</p>
+  const openProjectSuggestions = getOpenProjectQuestionSuggestions(3)
+    .map((s) => `- "${s}"`)
+    .join('<br>');
+
+  const emptyBody = _activeTab === 'project'
+    ? `
       <p class="text-xs text-gray-400 leading-relaxed">
-        Ask me to create a PM Deck for your project, or add tasks to the current board.
+        Ask for project risks, priorities, blockers,<br>or milestone planning support.
+      </p>
+      <p class="mt-2 text-[11px] text-gray-500 leading-relaxed">
+        Try:<br>${openProjectSuggestions}
+      </p>`
+    : `
+      <p class="text-xs text-gray-400 leading-relaxed">
+        Ask AI Dealer to create a PM Deck for your project, or add tasks to the current board.
       </p>
       <p class="mt-2 text-[11px] text-gray-500 leading-relaxed">
         Tip: use "to Done" / "to In Progress" for column targeting, or "add sub task X to task Y" for exact sub-task placement.
-      </p>
+      </p>`;
+
+  container.innerHTML = `
+    <div id="ai-chat-empty" class="flex flex-col items-center justify-center h-full text-center px-6 py-8">
+      <span class="text-5xl mb-3 select-none">✨</span>
+      <p class="text-sm font-semibold text-gray-600 mb-1">${_activeTab === 'project' ? 'Open Project Dealer' : 'Task / Creation Dealer'}</p>
+      ${emptyBody}
     </div>`;
 }
 
@@ -433,7 +493,11 @@ function _renderMessage(msg, animate) {
     ? 'max-w-[82%] rounded-2xl rounded-tr-sm px-3.5 py-2 text-sm bg-amber-100 text-amber-900 border border-amber-200 leading-relaxed'
     : 'max-w-[88%] rounded-2xl rounded-tl-sm px-3.5 py-2 text-sm bg-white border border-gray-200 text-gray-700 shadow-sm leading-relaxed';
 
-  bubble.textContent = msg.text;
+  if (isUser) {
+    bubble.textContent = msg.text;
+  } else {
+    bubble.innerHTML = _formatAssistantMessageToHtml(msg.text);
+  }
   wrap.appendChild(bubble);
   container.appendChild(wrap);
 
@@ -470,6 +534,70 @@ function _removeThinking() {
 function _scrollToBottom() {
   const c = document.getElementById('ai-chat-messages');
   if (c) c.scrollTop = c.scrollHeight;
+}
+
+function _escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function _formatAssistantMessageToHtml(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const html = [];
+  let listType = null;
+  let listItems = [];
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) {
+      listType = null;
+      listItems = [];
+      return;
+    }
+    const tag = listType === 'ol' ? 'ol' : 'ul';
+    const classes = tag === 'ol'
+      ? 'list-decimal ml-5 my-1 space-y-1'
+      : 'list-disc ml-5 my-1 space-y-1';
+    html.push(`<${tag} class="${classes}">${listItems.map((i) => `<li>${i}</li>`).join('')}</${tag}>`);
+    listType = null;
+    listItems = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushList();
+      continue;
+    }
+
+    const numbered = line.match(/^\d+\.\s+(.+)$/);
+    const bullet = line.match(/^-\s+(.+)$/);
+    if (numbered) {
+      if (listType !== 'ol') {
+        flushList();
+        listType = 'ol';
+      }
+      listItems.push(_escapeHtml(numbered[1]));
+      continue;
+    }
+    if (bullet) {
+      if (listType !== 'ul') {
+        flushList();
+        listType = 'ul';
+      }
+      listItems.push(_escapeHtml(bullet[1]));
+      continue;
+    }
+
+    flushList();
+    html.push(`<p class="my-1">${_escapeHtml(line)}</p>`);
+  }
+
+  flushList();
+  return html.join('');
 }
 
 // ─── Message handler ──────────────────────────────────────────────────────────
@@ -524,14 +652,14 @@ async function _handleSend(e) {
 
     if (_isTrivialMessage(text)) {
       _removeThinking();
-      _addToHistory('assistant', "Hi! I'm your AI project assistant. Try describing a project — for example: \"Build a mobile app for tracking workouts\" — and I'll create a full deck with tasks. This message counted toward your daily AI usage.");
+      _addToHistory('assistant', "Hi! I'm AI Dealer. Try describing a project — for example: \"Build a mobile app for tracking workouts\" — and I'll create a full deck with tasks. This message counted toward your daily AI usage.");
       return;
     }
 
-    if (_mode === 'boards') {
-      await _doBoardsMode(text);
-    } else if (_mode === 'dashboard') {
+    if (_activeTab === 'project' || _mode === 'dashboard') {
       await _doDashboardMode(text);
+    } else if (_mode === 'boards') {
+      await _doBoardsMode(text);
     } else {
       await _doBoardMode(text);
     }
@@ -718,6 +846,9 @@ async function _doDashboardMode(text) {
 
   const cards = getCardsSnapshot();
   const q = _normalize(text);
+  const intent = detectOpenProjectIntent(q);
+  const requestedFields = detectRequestedAnalysisFields(q);
+  const wantsAssignees = requestedFields.includes('assignees') || intent === 'assignee_assignment';
   const isEffectivelyCompleted = (c) => Boolean(c?.completed) || /\bdone\b|\bfinish(?:ed)?\b|\bcomplete(?:d)?\b|\bdeployment\b|\bresolved\b/i.test(String(c?.columnId || ''));
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -727,11 +858,24 @@ async function _doDashboardMode(text) {
   in14.setDate(in14.getDate() + 14);
 
   const openCards = cards.filter((c) => !isEffectivelyCompleted(c));
+  const doneCards = cards.filter((c) => isEffectivelyCompleted(c));
+  const completionRate = cards.length ? Math.round((doneCards.length / cards.length) * 100) : 0;
   const overdue = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') < today);
   const dueSoon = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') >= today && new Date(c.dueDate + 'T00:00:00') <= in7);
   const blocked = openCards.filter((c) => /blocked|risk|hold|waiting/i.test(String(c.columnId || '')));
   const due14 = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') <= in14);
   const undated = openCards.filter((c) => !c.dueDate);
+  const memberByUid = new Map((getBoardAssignedMembers() || []).map((m) => [m.uid, m]));
+  const assigneeLabel = (uid) => {
+    if (!uid || uid === 'Unassigned') return 'Unassigned';
+    const m = memberByUid.get(uid);
+    if (!m) return uid;
+    return m.displayName || (m.username ? `@${m.username}` : m.uid);
+  };
+  const cardOwnersLine = (card) => {
+    const owners = Array.isArray(card.assignees) && card.assignees.length ? card.assignees : ['Unassigned'];
+    return owners.map(assigneeLabel).join(', ');
+  };
   const fmt = (arr, max = 6) => arr
     .slice(0, max)
     .map((c) => `- ${c.title || 'Untitled'}${c.dueDate ? ` (${c.dueDate})` : ''}`)
@@ -774,6 +918,45 @@ async function _doDashboardMode(text) {
     if (delta === 1) return 'It is due tomorrow, which makes it the next urgent commitment.';
     if (delta <= 3) return `It is due in ${delta} days, so it should stay near the top of the queue.`;
     return `Its due date is still close enough that it should be planned now rather than later.`;
+  };
+  const effortEstimate = (task) => {
+    const subtasks = Array.isArray(task?.subtasks) ? task.subtasks : [];
+    const openSubtasks = subtasks.filter((s) => !s.completed).length;
+    const descLen = String(task?.description || '').trim().length;
+    const score = (openSubtasks * 4) + (subtasks.length * 2) + (descLen > 180 ? 3 : (descLen > 80 ? 2 : (descLen > 0 ? 1 : 0)));
+    const reasonBits = [];
+    if (openSubtasks > 0) reasonBits.push(`${openSubtasks} open subtask${openSubtasks === 1 ? '' : 's'}`);
+    if (subtasks.length > openSubtasks) reasonBits.push(`${subtasks.length} total subtasks`);
+    if (descLen > 80) reasonBits.push('larger scope description');
+    if (!reasonBits.length) reasonBits.push('not yet broken down, so effort is uncertain');
+    return { score, reason: reasonBits.join(', ') };
+  };
+  const assigneeLoad = (() => {
+    const load = new Map();
+    openCards.forEach((c) => {
+      const owners = Array.isArray(c.assignees) && c.assignees.length ? c.assignees : ['Unassigned'];
+      owners.forEach((o) => {
+        const label = assigneeLabel(o);
+        load.set(label, (load.get(label) || 0) + 1);
+      });
+    });
+    return [...load.entries()].sort((a, b) => b[1] - a[1]);
+  })();
+  const assigneeSection = () => {
+    const focus = sortByDue(dueSoon).slice(0, 5);
+    const lines = focus.length
+      ? focus.map((c, i) => `${i + 1}. ${taskLabel(c)}\n   Assigned: ${cardOwnersLine(c)}`).join('\n')
+      : 'No due-soon tasks to map by assignee.';
+    const loadLines = assigneeLoad.length
+      ? assigneeLoad.slice(0, 5).map(([who, count], i) => `${i + 1}. ${who}: ${count} open task${count === 1 ? '' : 's'}`).join('\n')
+      : 'No assignee workload data available.';
+    return [
+      'Assignee view:',
+      lines,
+      '',
+      'Workload snapshot:',
+      loadLines,
+    ].join('\n');
   };
   const recommendationExplanation = () => {
     if (/assign due dates?/.test(q)) {
@@ -820,7 +1003,70 @@ async function _doDashboardMode(text) {
 
   let answer = '';
 
-  if (/help me plan this milestone|plan this milestone|plan this task|milestone/.test(q) && specificallyMentioned) {
+  if (intent === 'risk_assessment') {
+    const riskLevel = overdue.length > 0
+      ? 'High'
+      : (dueSoon.length >= 3 || blocked.length > 0 ? 'Medium' : 'Low to Medium');
+    const topLoad = assigneeLoad[0];
+    answer = [
+      `Project risk summary: ${riskLevel}.`,
+      '',
+      `1. Schedule risk: ${overdue.length} overdue and ${dueSoon.length} due in the next 7 days.`,
+      `2. Execution risk: ${blocked.length} blocked task${blocked.length === 1 ? '' : 's'}.`,
+      `3. Planning risk: ${undated.length} open task${undated.length === 1 ? '' : 's'} without due dates.`,
+      `4. Capacity risk: ${topLoad ? `${topLoad[0]} owns ${topLoad[1]} open task${topLoad[1] === 1 ? '' : 's'}.` : 'No clear workload concentration detected.'}`,
+      '',
+      'Top tasks to watch:',
+      dueSoon.length ? fmt(sortByDue(dueSoon), 4) : '- No due-soon tasks currently.',
+      '',
+      'Recommended next moves:',
+      '1. Time-box and re-sequence the top 2 due-soon tasks.',
+      '2. Add due dates for undated work so forecast is reliable.',
+      '3. If any task is blocked, assign an unblock owner and deadline today.',
+    ].join('\n');
+  } else if (intent === 'assignee_assignment') {
+    answer = assigneeSection();
+  } else if (intent === 'longest_effort') {
+    const rankedEffort = [...openCards]
+      .map((c) => ({ card: c, ...effortEstimate(c) }))
+      .sort((a, b) => b.score - a.score);
+
+    if (!rankedEffort.length) {
+      answer = 'There are no open tasks to estimate right now.';
+    } else {
+      const top = rankedEffort[0];
+      answer = [
+        `Best estimate: "${taskName(top.card)}" will likely take the most time.`,
+        `Why: ${top.reason}.`,
+        '',
+        'Top effort candidates:',
+        rankedEffort.slice(0, 3).map((r, i) => `${i + 1}. ${taskLabel(r.card)}\n   Effort signal: ${r.reason}.`).join('\n'),
+        '',
+        'Tip: add/clean subtasks and acceptance criteria to improve estimate accuracy.',
+      ].join('\n');
+    }
+  } else if (intent === 'project_summary') {
+    const nextActions = [];
+    if (dueSoon.length) nextActions.push(`Prioritize ${taskLabel(sortByDue(dueSoon)[0])}.`);
+    if (undated.length) nextActions.push(`Schedule due dates for ${Math.min(undated.length, 3)} undated task${undated.length === 1 ? '' : 's'}.`);
+    if (blocked.length) nextActions.push(`Resolve blocker on ${taskLabel(blocked[0])}.`);
+    if (!nextActions.length) nextActions.push('Maintain momentum by closing one medium-priority task this cycle.');
+
+    answer = [
+      'Project summary:',
+      `- Total tasks: ${cards.length}`,
+      `- Completed: ${doneCards.length} (${completionRate}%)`,
+      `- Open: ${openCards.length}`,
+      `- Overdue: ${overdue.length}`,
+      `- Due in 7 days: ${dueSoon.length}`,
+      `- Blocked: ${blocked.length}`,
+      '',
+      dueSoon.length ? `Near-term focus:\n${fmt(sortByDue(dueSoon), 3)}` : 'Near-term focus: no due-soon tasks right now.',
+      '',
+      'Suggested next actions:',
+      nextActions.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+    ].join('\n');
+  } else if (intent === 'milestone_plan' && specificallyMentioned) {
     const target = specificallyMentioned;
     const delta = daysUntil(target.dueDate);
     answer = [
@@ -836,9 +1082,18 @@ async function _doDashboardMode(text) {
       `2. Confirm the owner and clear the first blocker or dependency today.`,
       `3. Add or update the next checkpoint date so progress is visible before the final due date.`,
     ].join('\n');
-  } else if (/explain this recommendation|explain this/.test(q)) {
+  } else if (intent === 'milestone_plan') {
+    answer = [
+      'I can build a milestone plan, but I need a specific task or milestone name.',
+      '',
+      'Try one of these:',
+      '1. help me plan this milestone "Fix Bug"',
+      '2. plan this task "Conduct Project Risk Assessment"',
+      '3. plan milestone "Release Readiness"',
+    ].join('\n');
+  } else if (intent === 'recommendation_explain') {
     answer = recommendationExplanation();
-  } else if (/overdue|recover|recovery/.test(q)) {
+  } else if (intent === 'overdue_recovery') {
     const focus = [...overdue]
       .sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))
       .slice(0, 3);
@@ -869,7 +1124,7 @@ async function _doDashboardMode(text) {
       '- each overdue task has owner, updated due date, and next concrete step.',
       '- no overdue task remains without status update by end of day.',
     ].join('\n');
-  } else if (/prioriti|rank|risk|urgency|due date/.test(q)) {
+  } else if (intent === 'priority_ranking') {
     const explicitSet = mentionedCards.length ? mentionedCards : [...overdue, ...dueSoon];
     const ranked = sortByDue(explicitSet);
     answer = [
@@ -881,7 +1136,7 @@ async function _doDashboardMode(text) {
         ? ranked.slice(0, 6).map((task, i) => `${i + 1}. ${taskLabel(task)}\n   Why: ${priorityReason(task)}`).join('\n')
         : '- No overdue or due-soon tasks found',
     ].join('\n');
-  } else if (/block|mitigation|unblock/.test(q)) {
+  } else if (intent === 'blockers') {
     answer = [
       blocked.length
         ? 'These are the tasks that need unblock actions first.'
@@ -896,7 +1151,7 @@ async function _doDashboardMode(text) {
       '3. Set a deadline for the unblock decision, not just the task due date.',
       '4. Add a fallback path if the dependency is not resolved in time.',
     ].join('\n');
-  } else if (/sprint|14 day|14-day|two week/.test(q)) {
+  } else if (intent === 'sprint_window') {
     answer = [
       'Here is a practical 14-day execution view based on what is already on the board.',
       '',
@@ -917,6 +1172,10 @@ async function _doDashboardMode(text) {
       '',
       'Ask me things like “rank the due-soon tasks,” “explain this recommendation,” or “help me plan this milestone.”',
     ].join('\n');
+  }
+
+  if (wantsAssignees && intent !== 'assignee_assignment') {
+    answer = `${answer}\n\n${assigneeSection()}`;
   }
 
   _addToHistory('assistant', answer);

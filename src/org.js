@@ -14,9 +14,13 @@ import {
   doc,
   addDoc,
   getDoc,
+  getDocs,
+  query,
   updateDoc,
+  where,
   arrayUnion,
   arrayRemove,
+  deleteField,
   serverTimestamp,
 } from 'firebase/firestore';
 
@@ -40,6 +44,9 @@ export async function createOrg(uid, name) {
     ownerId:   uid,
     members:   [uid],
     admins:    [uid],
+    memberRoles: {
+      [uid]: 'owner',
+    },
     createdAt: serverTimestamp(),
   });
   await updateDoc(doc(db, 'users', uid), {
@@ -60,6 +67,19 @@ export async function getOrgById(orgId) {
   if (!orgId) return null;
   const snap = await getDoc(doc(db, 'organizations', orgId));
   return snap.exists() ? { id: orgId, ...snap.data() } : null;
+}
+
+/**
+ * Returns all organizations where the user is a member.
+ *
+ * @param {string} uid
+ * @returns {Promise<object[]>}
+ */
+export async function getUserOrganizations(uid) {
+  if (!uid) return [];
+  const q = query(collection(db, 'organizations'), where('members', 'array-contains', uid));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
 /**
@@ -107,6 +127,7 @@ export async function addMemberByUsername(orgId, username, inviterOrgId) {
 
   await updateDoc(doc(db, 'organizations', orgId), {
     members: arrayUnion(user.uid),
+    [`memberRoles.${user.uid}`]: 'collaborator',
   });
   await updateDoc(doc(db, 'users', user.uid), {
     organizationId: orgId,
@@ -126,6 +147,7 @@ export async function removeMember(orgId, uid) {
   await updateDoc(doc(db, 'organizations', orgId), {
     members: arrayRemove(uid),
     admins: arrayRemove(uid),
+    [`memberRoles.${uid}`]: deleteField(),
   });
   await updateDoc(doc(db, 'users', uid), {
     organizationId: null,
@@ -141,18 +163,41 @@ export async function removeMember(orgId, uid) {
  * @param {boolean} isAdmin
  */
 export async function setOrgMemberAdminStatus(orgId, uid, isAdmin) {
+  return setOrgMemberRole(orgId, uid, isAdmin ? 'admin' : 'collaborator');
+}
+
+/**
+ * Sets the org role for a member and keeps admins[] aligned for rule checks.
+ * Supported roles: 'admin' | 'collaborator' | 'read-only'
+ * @param {string} orgId
+ * @param {string} uid
+ * @param {string} role
+ */
+export async function setOrgMemberRole(orgId, uid, role) {
   const org = await getOrgById(orgId);
   if (!org) throw new Error('Organization not found.');
   if (!Array.isArray(org.members) || !org.members.includes(uid)) {
-    throw new Error('User must be an organization member before becoming an admin.');
+    throw new Error('User must be an organization member before role assignment.');
   }
-  
+
+  const normalizedRole = String(role || '').toLowerCase();
+  if (!['admin', 'collaborator', 'read-only'].includes(normalizedRole)) {
+    throw new Error('Invalid role. Must be admin, collaborator, or read-only.');
+  }
+
+  if (org.ownerId === uid) {
+    throw new Error('Owner role cannot be changed.');
+  }
+
   const admins = Array.isArray(org.admins) ? org.admins : [];
-  const updatedAdmins = isAdmin
+  const updatedAdmins = normalizedRole === 'admin'
     ? [...new Set([...admins, uid])]
     : admins.filter((id) => id !== uid);
-  
-  await updateDoc(doc(db, 'organizations', orgId), { admins: updatedAdmins });
+
+  await updateDoc(doc(db, 'organizations', orgId), {
+    admins: updatedAdmins,
+    [`memberRoles.${uid}`]: normalizedRole,
+  });
 }
 
 /**
@@ -160,7 +205,6 @@ export async function setOrgMemberAdminStatus(orgId, uid, isAdmin) {
  * @returns {Promise<object[]>}
  */
 export async function getAllOrganizations() {
-  const { getDocs, collection } = await import('firebase/firestore');
   const snap = await getDocs(collection(db, 'organizations'));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }

@@ -165,11 +165,14 @@
         </button>
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
-        <button id="account-menu-btn-boards" aria-label="Account menu"
-          class="text-sm text-gray-400 hover:text-gray-700 transition-colors flex items-center gap-1">
-          Account
-          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        <button id="account-menu-btn-boards" aria-label="Account menu" title="Account settings"
+          class="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors flex items-center gap-0.5">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.592c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.48 7.48 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+          </svg>
+          <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
           </svg>
         </button>
       </div>
@@ -186,7 +189,7 @@
               class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-900
                      bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
               <span class="text-base leading-none">✨</span>
-              Use AI to help
+              Use AI Dealer
             </button>
             <button id="ai-board-help-btn" aria-label="AI help examples"
               class="w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold
@@ -208,7 +211,12 @@
           <button id="tab-current-btn"
             class="boards-tab px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
                    border-brand-500 text-brand-600">
-            Current Decks
+            My Decks
+          </button>
+          <button id="tab-org-btn"
+            class="boards-tab px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
+                   border-transparent text-gray-500 hover:text-gray-700">
+            My Organization Decks
           </button>
           <button id="tab-archived-btn"
             class="boards-tab px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors
@@ -307,11 +315,14 @@
       <div id="board-header-right" class="flex items-center gap-3">
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
-        <button id="account-menu-btn-board" aria-label="Account menu"
-          class="text-sm text-gray-400 hover:text-gray-700 transition-colors flex items-center gap-1">
-          Account
-          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        <button id="account-menu-btn-board" aria-label="Account menu" title="Account settings"
+          class="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors flex items-center gap-0.5">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.592c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.48 7.48 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>
+          </svg>
+          <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
           </svg>
         </button>
       </div>
@@ -370,7 +381,7 @@
             class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-amber-900
                    bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
             <span class="text-base leading-none">✨</span>
-            Use AI to help
+            Use AI Dealer
           </button>
           <button id="ai-board-help-btn-board" aria-label="AI help examples"
             class="w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold
@@ -390,7 +401,30 @@
 
   </div>
 
-  <!-- ── 5. AI Dashboard view ─────────────────────────────────────────────── -->
+  <!-- ── 5. Admin Panel view ─────────────────────────────────────────────── -->
+  <div id="admin-panel-view" class="hidden flex-col h-full">
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button id="back-from-admin-panel-btn"
+          class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Back
+        </button>
+        <h2 class="text-lg font-semibold text-gray-800">Admin Panel</h2>
+      </div>
+      <div class="flex items-center gap-2">
+        <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
+        <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
+      </div>
+    </header>
+    <main class="flex-1 overflow-auto p-6 bg-[#f7f8fc]">
+      <div id="admin-panel-root" class="max-w-6xl mx-auto"></div>
+    </main>
+  </div>
+
+  <!-- ── 6. AI Dashboard view ─────────────────────────────────────────────── -->
   <div id="ai-dashboard-view" class="hidden flex-col h-full">
     <header id="ai-dashboard-header" class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
       <div id="ai-dashboard-header-left" class="flex items-center gap-3">
@@ -437,7 +471,7 @@
         flex flex-col shadow-2xl z-40 ai-chat-collapsed
         transition-[width,top] duration-300 ease-in-out"
       style="display:none"
-         aria-label="AI Assistant">
+        aria-label="AI Dealer">
 
       <button id="ai-chat-resizer"
         class="absolute left-0 top-0 bottom-0 w-2 -translate-x-1 cursor-ew-resize"
@@ -448,7 +482,7 @@
     <div id="ai-chat-header" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-amber-50 flex-shrink-0">
       <div id="ai-chat-brand" class="flex items-center gap-2">
         <span id="ai-chat-icon" class="text-lg leading-none select-none">✨</span>
-        <h2 id="ai-chat-title" class="text-sm font-semibold text-amber-900">AI Assistant</h2>
+        <h2 id="ai-chat-title" class="text-sm font-semibold text-amber-900">AI Dealer</h2>
       </div>
       <span id="ai-chat-usage" class="text-[11px] text-amber-800/80 mr-2"></span>
       <div id="ai-chat-header-controls" class="flex items-center gap-1">
@@ -476,12 +510,21 @@
       </div>
     </div>
 
+    <div id="ai-chat-tabs" class="px-3 py-2 border-b border-gray-100 bg-white flex items-center gap-1.5 flex-shrink-0">
+      <button id="ai-chat-tab-create" type="button"
+              class="ai-chat-tab-btn px-2.5 py-1.5 rounded-md text-[11px] font-medium bg-amber-100 text-amber-900 border border-amber-200"
+              data-tab="create">Task / Creation</button>
+      <button id="ai-chat-tab-project" type="button"
+              class="ai-chat-tab-btn px-2.5 py-1.5 rounded-md text-[11px] font-medium text-gray-600 border border-gray-200 hover:bg-gray-50"
+              data-tab="project">Open Project</button>
+    </div>
+
     <!-- Messages -->
     <div id="ai-chat-messages"
          class="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 bg-gray-50">
       <div id="ai-chat-empty" class="flex flex-col items-center justify-center h-full text-center px-6 py-8">
         <span class="text-5xl mb-3 select-none">✨</span>
-        <p class="text-sm font-semibold text-gray-600 mb-1">AI Assistant</p>
+        <p class="text-sm font-semibold text-gray-600 mb-1">AI Dealer</p>
         <p class="text-xs text-gray-400 leading-relaxed">
           Ask me to create a PM Deck for your project,<br>or add tasks to the current board.
         </p>

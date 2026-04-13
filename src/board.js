@@ -23,6 +23,10 @@ import {
   deleteDoc,
   query,
   where,
+  orderBy,
+  startAfter,
+  limit,
+  documentId,
   getDocs,
   serverTimestamp,
 } from 'firebase/firestore';
@@ -204,7 +208,7 @@ export function setBoardId(id) {
  * @param {string} [projectType='standard']
  * @returns {Promise<string>} boardId
  */
-export async function createBoard(user, title = 'My Board', columns = DEFAULT_COLUMNS, dueDate = null, color = null, projectType = 'standard', { visibility = 'private', orgId = null, assignedMembers = [] } = {}) {
+export async function createBoard(user, title = 'My Board', columns = DEFAULT_COLUMNS, dueDate = null, color = null, projectType = 'standard', { visibility = 'private', orgId = null, assignedMembers = [], projectDeckOwnerId = null } = {}) {
   const deckGate = await canCreateDeck(user.uid);
   if (!deckGate.allowed) {
     throw new Error(`Deck limit reached for ${deckGate.plan.label} (${deckGate.limit}).`);
@@ -221,9 +225,56 @@ export async function createBoard(user, title = 'My Board', columns = DEFAULT_CO
     visibility:      visibility || 'private',
     orgId:           orgId || null,
     assignedMembers: Array.isArray(assignedMembers) ? assignedMembers : [],
+    projectDeckOwnerId: visibility === 'org' ? (projectDeckOwnerId || user.uid || null) : null,
     createdAt: serverTimestamp(),
   });
   return ref.id;
+}
+
+/**
+ * Fetches org-visible boards for one or more organizations.
+ * Uses chunked "in" queries to stay within Firestore constraints.
+ *
+ * @param {string[]} orgIds
+ * @returns {Promise<Array<object>>}
+ */
+export async function getOrgBoards(orgIds = []) {
+  if (!Array.isArray(orgIds) || orgIds.length === 0) return [];
+
+  const cleanOrgIds = [...new Set(orgIds.filter(Boolean))];
+  if (cleanOrgIds.length === 0) return [];
+
+  const seen = new Set();
+  const boards = [];
+  await Promise.all(cleanOrgIds.map(async (orgId) => {
+    let cursor = null;
+
+    while (true) {
+      const constraints = [
+        where('orgId', '==', orgId),
+        where('visibility', '==', 'org'),
+        orderBy(documentId()),
+        limit(10),
+      ];
+      if (cursor) constraints.push(startAfter(cursor));
+
+      const snap = await getDocs(query(collection(db, 'boards'), ...constraints));
+      if (snap.empty) break;
+
+      snap.docs.forEach((d) => {
+        if (seen.has(d.id)) return;
+        const data = d.data() || {};
+        seen.add(d.id);
+        boards.push({ id: d.id, ...data });
+      });
+
+      if (snap.size < 10) break;
+      cursor = snap.docs[snap.docs.length - 1];
+    }
+  }));
+
+  boards.sort((a, b) => (a.createdAt?.seconds ?? 0) - (b.createdAt?.seconds ?? 0));
+  return boards;
 }
 
 /**
@@ -263,13 +314,47 @@ export async function getCardStatsByUserId(userId) {
 }
 
 /**
+ * Returns per-board task and subtask counts for a specific board ID set.
+ *
+ * @param {string[]} boardIds
+ * @returns {Promise<Map<string, {taskCount: number, subtaskCount: number}>>}
+ */
+export async function getCardStatsByBoardIds(boardIds = []) {
+  const cleanBoardIds = [...new Set((Array.isArray(boardIds) ? boardIds : []).filter(Boolean))];
+  if (cleanBoardIds.length === 0) return new Map();
+
+  const chunks = [];
+  for (let i = 0; i < cleanBoardIds.length; i += 10) {
+    chunks.push(cleanBoardIds.slice(i, i + 10));
+  }
+
+  const stats = new Map();
+  const snaps = await Promise.all(
+    chunks.map((chunk) => getDocs(query(collection(db, 'cards'), where('boardId', 'in', chunk))))
+  );
+
+  snaps.forEach((snap) => {
+    snap.docs.forEach((d) => {
+      const { boardId, subtasks } = d.data();
+      if (!boardId) return;
+      const entry = stats.get(boardId) ?? { taskCount: 0, subtaskCount: 0 };
+      entry.taskCount += 1;
+      entry.subtaskCount += Array.isArray(subtasks) ? subtasks.length : 0;
+      stats.set(boardId, entry);
+    });
+  });
+
+  return stats;
+}
+
+/**
  * Renames a board document.
  * @param {string} boardId
  * @param {string} newTitle
  * @param {string|null} [dueDate=null]
  * @returns {Promise<void>}
  */
-export async function renameBoard(boardId, newTitle, dueDate = null, { visibility, orgId, assignedMembers } = {}) {
+export async function renameBoard(boardId, newTitle, dueDate = null, { visibility, orgId, assignedMembers, projectDeckOwnerId } = {}) {
   const data = {
     title: newTitle.trim() || 'My Board',
     dueDate: dueDate || null,
@@ -278,6 +363,7 @@ export async function renameBoard(boardId, newTitle, dueDate = null, { visibilit
     data.visibility = visibility;
     data.orgId = visibility === 'org' ? (orgId || null) : null;
     data.assignedMembers = visibility === 'org' ? (assignedMembers || []) : [];
+    data.projectDeckOwnerId = visibility === 'org' ? (projectDeckOwnerId || null) : null;
   }
   await updateDoc(doc(db, 'boards', boardId), data);
 }

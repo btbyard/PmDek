@@ -47,8 +47,13 @@ service cloud.firestore {
 
     function isGlobalAdmin() {
       return signedIn()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+        && (
+          request.auth.token.email in ['bradster8@yahoo.com']
+          || (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+          )
+        );
     }
 
     function isOrgAdmin(orgId) {
@@ -109,7 +114,7 @@ service cloud.firestore {
         resource.data.ownerId == request.auth.uid
         || (
           isOrgAdmin(orgId)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'admins'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'admins', 'memberRoles'])
           && orgMemberCountAllowed(resource.data.ownerId, request.resource.data.members.size())
           && request.resource.data.ownerId == resource.data.ownerId
           && request.resource.data.name == resource.data.name
@@ -120,19 +125,28 @@ service cloud.firestore {
 
     // ── boards ─────────────────────────────────────────────────────────────
     match /boards/{boardId} {
-      allow read: if signedIn() && canReadBoardData(resource.data);
+      allow read: if signedIn() && (canReadBoardData(resource.data) || isGlobalAdmin());
       allow create: if signedIn()
         && request.resource.data.userId == request.auth.uid
         && (
           request.resource.data.visibility == 'private'
           || (request.resource.data.visibility == 'org' && isOrgMember(request.resource.data.orgId))
         );
-      allow update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+      allow update: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || (
+          resource.data.visibility == 'org'
+          && isOrgAdmin(resource.data.orgId)
+        )
+      );
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
     }
 
     // ── cards ──────────────────────────────────────────────────────────────
     match /cards/{cardId} {
       allow read: if signedIn() && (
+        isGlobalAdmin()
+        ||
         resource.data.userId == request.auth.uid
         || (
           exists(/databases/$(database)/documents/boards/$(resource.data.boardId))
@@ -152,6 +166,18 @@ service cloud.firestore {
     // ── completionLog ────────────────────────────────────────────────────
     match /completionLog/{logId} {
       allow read, write: if signedIn();
+    }
+
+    // ── supportTickets ────────────────────────────────────────────────────
+    match /supportTickets/{ticketId} {
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid;
+      allow read: if signedIn() && (
+        resource.data.uid == request.auth.uid
+        || isGlobalAdmin()
+      );
+      allow update: if signedIn() && isGlobalAdmin();
+      allow delete: if false;
     }
   }
 }

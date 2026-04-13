@@ -73,6 +73,15 @@ export async function updateUserDisplayName(uid, displayName) {
   await updateDoc(doc(db, 'users', uid), { displayName: displayName.trim() });
 }
 
+/**
+ * Updates the profile photo URL on the /users/{uid} document.
+ * @param {string} uid
+ * @param {string|null} photoURL
+ */
+export async function updateUserPhotoURL(uid, photoURL) {
+  await updateDoc(doc(db, 'users', uid), { photoURL: photoURL || '' });
+}
+
 // ─── Username system ──────────────────────────────────────────────────────────
 
 /**

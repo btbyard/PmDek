@@ -5,5 +5,12 @@ service firebase.storage {
     match /attachments/{userId}/{allPaths=**} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
+
+    // Profile photos — owners can upload/manage their own photos.
+    // Authenticated users can read so avatars can be shown in shared/org views.
+    match /profile-photos/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
   }
 }
