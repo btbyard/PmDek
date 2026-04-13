@@ -371,6 +371,21 @@
           </svg>
           Full Screen
         </button>
+        <button id="filter-my-tasks-btn" title="Show only tasks assigned to me"
+          class="filter-chip flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-500 hover:border-blue-300 hover:text-blue-600 transition-colors">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A11.955 11.955 0 0112 15c2.2 0 4.26.593 6.03 1.628M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          My Tasks
+        </button>
+        <!-- Board Zoom -->
+        <div class="flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-1 py-0.5">
+          <button id="board-zoom-out-btn" title="Zoom out board"
+            class="w-6 h-6 flex items-center justify-center rounded text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-colors text-base font-medium leading-none">−</button>
+          <span id="board-zoom-label" class="text-[11px] font-medium text-gray-500 w-8 text-center select-none">100%</span>
+          <button id="board-zoom-in-btn" title="Zoom in board"
+            class="w-6 h-6 flex items-center justify-center rounded text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-colors text-base font-medium leading-none">+</button>
+        </div>
         <!-- Clear filters -->
         <button id="filter-clear-btn" title="Clear all filters" class="hidden text-xs text-gray-400 hover:text-gray-700 transition-colors px-1">✕ Clear</button>
         <!-- Card count summary -->

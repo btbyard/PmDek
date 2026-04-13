@@ -19,7 +19,7 @@ import {
   initAuth, signInWithGoogle, signInWithGitHub, signOutUser,
   signInWithEmail, registerWithEmail, resetPassword, deleteAccount,
 } from './auth.js';
-import { renderBoard, setBoardId, createColumnBlock, resetColumnWidths } from './board.js';
+import { renderBoard, setBoardId, createColumnBlock, resetColumnWidths, refreshStickyNoteHeights } from './board.js';
 import { subscribeToCards, unsubscribeFromCards, initCardEvents, setBoardAssignedMembers, getBoardAssignedMembers, renderListView, renderCalendarView, getCardsSnapshot } from './cards.js';
 import { renderBoardsHome, openCreateBoardModal }                 from './boards-home.js';
 import { initAiChat, setAiChatMode, openAiChatWithPrompt, collapseAiChat, expandAiChat } from './ai-chat.js';
@@ -79,7 +79,9 @@ initAuth(
         _openBoard(boardId, board);
       },
     });
+    const _savedHash = location.hash;
     await _showBoardsHome();
+    await _restoreFromHash(_savedHash);
   },
   () => {
     _user = null;
@@ -92,7 +94,18 @@ initAuth(
 
 // ─── Boards home ──────────────────────────────────────────────────────────────
 
+async function _restoreFromHash(hash) {
+  const h = (hash || '').replace(/^#/, '');
+  if (!h || h === 'boards') return;
+  if (h === 'organizations') { await _openOrganizationsPage(); return; }
+  const aiMatch = h.match(/^ai-dashboard\/(.+)$/);
+  if (aiMatch) { await _openBoard(aiMatch[1]); _openAiDashboardPage(); return; }
+  const boardMatch = h.match(/^board\/(.+)$/);
+  if (boardMatch) { await _openBoard(boardMatch[1]); return; }
+}
+
 async function _showBoardsHome() {
+  location.hash = 'boards';
   _showView('boards');
   setAiChatMode('boards');
   await renderBoardsHome(_user, (boardId, board) => {
@@ -200,7 +213,10 @@ async function _openBoard(boardId, board) {
   initCardEvents(_user);
   _applyBoardView(_boardViewMode);
   setAiChatMode('board');
+  location.hash = `board/${boardId}`;
   _showView('board');
+  // Board view is now visible — measure sticky textarea heights correctly.
+  requestAnimationFrame(() => refreshStickyNoteHeights());
 }
 
 function _applyBoardView(mode = 'kanban') {
@@ -232,6 +248,7 @@ function _applyBoardView(mode = 'kanban') {
 
 function _openAiDashboardPage() {
   _renderAiDashboardPage();
+  location.hash = `ai-dashboard/${_currentBoardId}`;
   _showView('ai-dashboard');
   setAiChatMode('dashboard');
   collapseAiChat();
@@ -945,6 +962,32 @@ document.getElementById('fullscreen-focus-btn')?.addEventListener('click', () =>
     if (closeBtn) closeBtn.style.display = 'none';
   }
 });
+
+// ─── Board zoom ───────────────────────────────────────────────────────────────
+const ZOOM_STEPS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0];
+let _zoomIdx = ZOOM_STEPS.indexOf(1.0);
+
+function _applyBoardZoom(idx) {
+  _zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, idx));
+  const scale = ZOOM_STEPS[_zoomIdx];
+  const wrapper = document.getElementById('columns-wrapper');
+  if (wrapper) {
+    // Use CSS zoom instead of transform:scale — zoom changes actual layout
+    // geometry so no whitespace gaps appear.
+    wrapper.style.zoom = scale === 1 ? '' : String(scale);
+    wrapper.style.transform = '';
+    wrapper.style.transformOrigin = '';
+    wrapper.style.width = '';
+    wrapper.style.height = '';
+  }
+  const label = document.getElementById('board-zoom-label');
+  if (label) label.textContent = `${Math.round(scale * 100)}%`;
+  document.getElementById('board-zoom-out-btn')?.toggleAttribute('disabled', _zoomIdx === 0);
+  document.getElementById('board-zoom-in-btn')?.toggleAttribute('disabled', _zoomIdx === ZOOM_STEPS.length - 1);
+}
+
+document.getElementById('board-zoom-out-btn')?.addEventListener('click', () => _applyBoardZoom(_zoomIdx - 1));
+document.getElementById('board-zoom-in-btn')?.addEventListener('click', () => _applyBoardZoom(_zoomIdx + 1));
 
 function _readLocalCompletionLogs(boardId) {
   try {
@@ -2141,6 +2184,7 @@ async function _openAccountSettingsModal() {
 }
 
 async function _openOrganizationsPage() {
+  location.hash = 'organizations';
   _showView('organizations');
   const root = document.getElementById('organizations-root');
   if (!root) return;
@@ -2394,6 +2438,98 @@ async function _openOrganizationsPage() {
   });
 }
 
+// ─── Admin panel: dependency list ─────────────────────────────────────────────
+
+/** All packages from package.json and functions/package.json, baked in at build time. */
+const _DEPS = {
+  frontend: {
+    dependencies: {
+      'firebase': '^10.12.0',
+    },
+    devDependencies: {
+      '@tailwindcss/forms': '^0.5.7',
+      'autoprefixer': '^10.4.19',
+      'postcss': '^8.4.38',
+      'tailwindcss': '^3.4.4',
+      'vite': '^5.3.1',
+    },
+  },
+  functions: {
+    dependencies: {
+      '@google/genai': '^1.49.0',
+      '@google/generative-ai': '^0.15.0',
+      'firebase-admin': '^12.2.0',
+      'firebase-functions': '^5.0.1',
+      'stripe': '^18.5.0',
+    },
+    devDependencies: {
+      'firebase-functions-test': '^3.2.0',
+    },
+  },
+};
+
+function _buildDepsSection() {
+  const renderGroup = (label, pkgs, isDev = false) => {
+    const rows = Object.entries(pkgs).map(([name, ver]) => {
+      const clean = ver.replace(/^[\^~>=<]+/, '');
+      const hasRange = /^[\^~>=<]/.test(ver);
+      const badge = isDev
+        ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-medium">dev</span>'
+        : '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">prod</span>';
+      const rangeBadge = hasRange
+        ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium" title="Range prefix ${ver.replace(clean, '').trim()} allows minor/patch updates">${ver.replace(clean, '').trim()} range</span>`
+        : '';
+      return `
+        <tr class="border-b border-gray-100 hover:bg-gray-50">
+          <td class="px-3 py-2 text-sm font-medium text-gray-800">${_escHtml(name)}</td>
+          <td class="px-3 py-2 text-sm font-mono text-gray-700">${_escHtml(clean)}</td>
+          <td class="px-3 py-2 text-xs">${_escHtml(ver)}</td>
+          <td class="px-3 py-2"><div class="flex items-center gap-1">${badge}${rangeBadge}</div></td>
+        </tr>`;
+    }).join('');
+    return `
+      <tr class="bg-gray-50">
+        <td colspan="4" class="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">${label}</td>
+      </tr>
+      ${rows}`;
+  };
+
+  const frontendRows = renderGroup('Frontend — dependencies', _DEPS.frontend.dependencies, false)
+    + renderGroup('Frontend — devDependencies', _DEPS.frontend.devDependencies, true);
+
+  const functionsRows = renderGroup('Functions — dependencies', _DEPS.functions.dependencies, false)
+    + renderGroup('Functions — devDependencies', _DEPS.functions.devDependencies, true);
+
+  const totalPkgs = Object.values(_DEPS).reduce(
+    (acc, g) => acc + Object.keys(g.dependencies || {}).length + Object.keys(g.devDependencies || {}).length, 0,
+  );
+
+  return `
+    <div class="mb-8">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-lg font-semibold text-gray-800">Dependencies <span class="text-sm font-normal text-gray-500">(${totalPkgs} packages — run <code class="bg-gray-100 px-1 rounded text-xs">npm outdated</code> to check for updates)</span></h3>
+      </div>
+      <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white mb-4">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th class="px-3 py-2.5 text-left font-semibold text-gray-700">Package</th>
+              <th class="px-3 py-2.5 text-left font-semibold text-gray-700">Version</th>
+              <th class="px-3 py-2.5 text-left font-semibold text-gray-700">Range spec</th>
+              <th class="px-3 py-2.5 text-left font-semibold text-gray-700">Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${frontendRows}
+            ${functionsRows}
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-gray-400">Versions are read from <code class="bg-gray-100 px-1 rounded">package.json</code> at build time. To update, run <code class="bg-gray-100 px-1 rounded">npm update</code> in the root and <code class="bg-gray-100 px-1 rounded">functions/</code> folders, then redeploy.</p>
+    </div>
+  `;
+}
+
 // ─── Admin panel ──────────────────────────────────────────────────────────────
 
 async function _openAdminPanel(returnViewName = _activeViewName) {
@@ -2602,6 +2738,8 @@ async function _openAdminPanel(returnViewName = _activeViewName) {
           </table>
         </div>
       </div>
+
+      ${_buildDepsSection()}
     `;
 
     // ── Admin toggle listeners ──────────────────────────────────────────────

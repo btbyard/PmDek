@@ -33,6 +33,7 @@ import {
 
 import { db } from './firebase.js';
 import { reRenderCards, updateAllCardsBackground } from './cards.js';
+import { getUserProfile } from './users.js';
 import { canCreateDeck, assertProjectTypeAllowed } from './billing.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -225,6 +226,7 @@ export async function createBoard(user, title = 'My Board', columns = DEFAULT_CO
     visibility:      visibility || 'private',
     orgId:           orgId || null,
     assignedMembers: Array.isArray(assignedMembers) ? assignedMembers : [],
+    stickyNotes: [],
     projectDeckOwnerId: visibility === 'org' ? (projectDeckOwnerId || user.uid || null) : null,
     createdAt: serverTimestamp(),
   });
@@ -399,6 +401,18 @@ export async function updateBoardTaskBgColor(boardId, color) {
 }
 
 /**
+ * Updates sticky notes for a board.
+ * @param {string} boardId
+ * @param {Array<object>} stickyNotes
+ * @returns {Promise<void>}
+ */
+export async function updateBoardStickyNotes(boardId, stickyNotes = []) {
+  await updateDoc(doc(db, 'boards', boardId), {
+    stickyNotes: Array.isArray(stickyNotes) ? stickyNotes : [],
+  });
+}
+
+/**
  * Saves updated column titles back to the board document.
  * Columns are an embedded array so this replaces the whole array.
  * @param {string} boardId
@@ -491,6 +505,11 @@ export async function createColumnBlock(title = 'New Card') {
  */
 export function renderBoard(board) {
   const boardRoot = document.getElementById('board-root');
+
+  // Preserve current zoom styling because re-render replaces #columns-wrapper.
+  const prevWrapper = document.getElementById('columns-wrapper');
+  const prevZoom = prevWrapper?.style.zoom || '';
+
   boardRoot.innerHTML = '';
 
   const columns = (board.columns && board.columns.length)
@@ -499,8 +518,10 @@ export function renderBoard(board) {
 
   // Centered scrollable columns wrapper
   const columnsWrapper = document.createElement('div');
-  columnsWrapper.className = 'flex gap-4 items-start justify-center overflow-x-auto overflow-y-visible pb-4 px-4';
+  columnsWrapper.className = 'flex-1 min-w-0 flex gap-4 items-start overflow-x-auto overflow-y-visible pb-4 px-2';
   columnsWrapper.id = 'columns-wrapper';
+
+  if (prevZoom) columnsWrapper.style.zoom = prevZoom;
 
   columns.forEach((col) => {
     columnsWrapper.appendChild(buildColumnEl(col, board.id, columns));
@@ -653,8 +674,243 @@ export function renderBoard(board) {
   actionStack.appendChild(taskBgWrap);
   columnsWrapper.appendChild(actionStack);
 
-  boardRoot.appendChild(columnsWrapper);
+  const boardLayout = document.createElement('div');
+  boardLayout.className = 'flex items-start gap-4';
+
+  const stickyLane = _buildStickyNotesLane(board);
+  boardLayout.appendChild(stickyLane);
+  boardLayout.appendChild(columnsWrapper);
+
+  boardRoot.appendChild(boardLayout);
   _initColumnDrag(board.id, columns);
+}
+
+/**
+ * Re-measures sticky note textarea heights after the board view becomes visible.
+ * Must be called after the board view is shown (display!=none) so scrollHeight is accurate.
+ */
+export function refreshStickyNoteHeights() {
+  document.querySelectorAll('.sticky-stack-card textarea').forEach((ta) => {
+    ta.style.height = 'auto';
+    ta.style.height = `${ta.scrollHeight}px`;
+  });
+}
+
+/** Deterministic color from a UID — matches the palette in cards.js. */
+function _uidToColor(uid) {
+  const COLORS = ['#6366f1','#8b5cf6','#ec4899','#ef4444','#f97316','#d97706','#22c55e','#14b8a6','#3b82f6'];
+  let hash = 0;
+  for (let i = 0; i < uid.length; i++) hash = (hash * 31 + uid.charCodeAt(i)) >>> 0;
+  return COLORS[hash % COLORS.length];
+}
+
+function _normalizeStickyNotes(notes) {
+  if (!Array.isArray(notes)) return [];
+  return notes
+    .map((note) => {
+      const safeId = String(note?.id || '').trim();
+      if (!safeId) return null;
+      return {
+        id: safeId,
+        title: String(note?.title || '').slice(0, 80),
+        body: String(note?.body || '').slice(0, 1200),
+        color: String(note?.color || '#fde68a'),
+        pinned: Boolean(note?.pinned),
+        createdBy: String(note?.createdBy || ''),
+        updatedAt: Number(note?.updatedAt || Date.now()),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function _buildStickyNotesLane(board) {
+  const lane = document.createElement('aside');
+  lane.className = 'sticky-notes-lane w-fit flex-shrink-0 rounded-lg border border-amber-200/80 bg-amber-50/60 px-2.5 py-2 shadow-sm';
+
+  const notes = _normalizeStickyNotes(board.stickyNotes);
+  let workingNotes = [...notes];
+  const isOrgBoard = Boolean(board.orgId);
+  let saveTimer = null;
+
+  const queueSave = () => {
+    if (saveTimer) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(async () => {
+      try {
+        await updateBoardStickyNotes(board.id, workingNotes);
+      } catch (err) {
+        console.error('Failed to save sticky notes:', err);
+      }
+    }, 260);
+  };
+
+  const notesWrap = document.createElement('div');
+  notesWrap.className = 'mt-2';
+
+  // Cascading vertical stack — no fixed height, grows with notes
+  const stackViewport = document.createElement('div');
+  stackViewport.className = 'sticky-stack-viewport relative flex flex-col pb-2';
+
+  // Alternating slight horizontal offsets for scattered-desk feel (no rotation — breaks caret)
+  const OFFSETS = ['0px', '2px', '-1px', '3px', '-2px'];
+
+  const renderNotes = () => {
+    notesWrap.innerHTML = '';
+    stackViewport.innerHTML = '';
+
+    if (workingNotes.length === 0) {
+      lane.style.width = '';
+      return;
+    }
+    lane.style.width = '15rem';
+
+    // Render oldest first so the most recent note ends up at the bottom on top.
+    [...workingNotes].reverse().forEach((note, idx) => {
+      const card = document.createElement('article');
+      card.className = [
+        'sticky-stack-card relative border border-amber-400/60 p-3 shadow-md cursor-text',
+        idx > 0 ? '-mt-3' : '',   // overlap = bottom padding only, so all note text stays visible
+      ].join(' ');
+      // Ascending z-index: cards lower on screen sit on top of those above
+      card.style.zIndex = String(idx + 1);
+      card.style.background = note.color;
+      card.style.backgroundImage = `repeating-linear-gradient(transparent, transparent 20px, rgba(180,140,30,0.10) 20px, rgba(180,140,30,0.10) 21px), linear-gradient(175deg, ${note.color} 0%, #fffbe8 100%)`;
+      card.style.marginLeft = OFFSETS[idx % OFFSETS.length];
+
+      // ── Delete × ────────────────────────────────────────────────────────
+      const deleteIcon = document.createElement('button');
+      deleteIcon.type = 'button';
+      deleteIcon.title = 'Delete note';
+      deleteIcon.className = [
+        'sticky-delete-btn absolute top-1.5 right-1.5',
+        'w-5 h-5 flex items-center justify-center rounded',
+        'text-amber-700/60 hover:text-red-600 hover:bg-red-100/70',
+        'opacity-0 transition-all duration-100',
+      ].join(' ');
+      deleteIcon.innerHTML = `<svg class="w-3 h-3 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/>
+      </svg>`;
+      deleteIcon.addEventListener('click', (e) => {
+        e.stopPropagation();
+        workingNotes = workingNotes.filter((n) => n.id !== note.id);
+        renderNotes();
+        queueSave();
+      });
+
+      // ── Fold corner ──────────────────────────────────────────────────────
+      const fold = document.createElement('div');
+      fold.className = 'sticky-fold-corner pointer-events-none';
+      card.appendChild(fold);
+      card.appendChild(deleteIcon);
+
+      card.addEventListener('mouseenter', () => deleteIcon.classList.remove('opacity-0'));
+      card.addEventListener('mouseleave', () => deleteIcon.classList.add('opacity-0'));
+      card.addEventListener('click', (e) => {
+        if (e.target !== deleteIcon && !deleteIcon.contains(e.target)) bodyInput.focus();
+      });
+
+      // ── Creator avatar (org boards only) ─────────────────────────────────
+      let avatarEl = null;
+      if (isOrgBoard && note.createdBy) {
+        avatarEl = document.createElement('div');
+        avatarEl.className = 'w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0';
+        avatarEl.style.background = _uidToColor(note.createdBy);
+        avatarEl.textContent = '…';
+
+        // Resolve profile async
+        getUserProfile(note.createdBy).then((profile) => {
+          if (!profile) { avatarEl.textContent = '?'; return; }
+          if (profile.photoURL) {
+            avatarEl.innerHTML = '';
+            avatarEl.style.background = '';
+            const img = document.createElement('img');
+            img.src = profile.photoURL;
+            img.alt = profile.displayName || '';
+            img.title = profile.displayName || profile.email || '';
+            img.className = 'w-5 h-5 rounded-full object-cover border border-gray-200';
+            avatarEl.appendChild(img);
+          } else {
+            const initials = (profile.displayName || profile.username || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+            avatarEl.textContent = initials;
+            avatarEl.title = profile.displayName || profile.email || '';
+          }
+        }).catch(() => { avatarEl.textContent = '?'; });
+      }
+
+      // ── Editable textarea (all notes editable) ───────────────────────────
+      const bodyInput = document.createElement('textarea');
+      bodyInput.rows = 3;
+      bodyInput.maxLength = 1200;
+      bodyInput.placeholder = 'Write a quick note...';
+      bodyInput.className = 'flex-1 min-w-0 text-xs placeholder-amber-700/60 border-0 outline-none p-1 resize-none focus:ring-0 cursor-text';
+      bodyInput.value = note.body;
+      bodyInput.style.overflowY = 'hidden';
+      bodyInput.style.caretColor = '#000';
+      bodyInput.style.color = '#3b1a08';
+      bodyInput.style.backgroundColor = 'transparent';
+      bodyInput.style.webkitTextFillColor = '#3b1a08';
+      bodyInput.addEventListener('input', () => {
+        note.body = bodyInput.value;
+        note.updatedAt = Date.now();
+        // Grow textarea without collapsing height first (avoids killing caret).
+        const sh = bodyInput.scrollHeight;
+        if (bodyInput.offsetHeight < sh) {
+          bodyInput.style.height = `${sh}px`;
+        }
+        queueSave();
+      });
+
+      // Wrap avatar + textarea in a flex row so text starts right of bubble
+      if (avatarEl) {
+        const row = document.createElement('div');
+        row.className = 'flex items-start gap-1.5';
+        row.appendChild(avatarEl);
+        row.appendChild(bodyInput);
+        card.appendChild(row);
+      } else {
+        card.appendChild(bodyInput);
+      }
+      stackViewport.appendChild(card);
+    });
+
+    notesWrap.appendChild(stackViewport);
+
+    // Measure heights now that elements are in the live DOM (fixes delete + initial load).
+    requestAnimationFrame(() => {
+      stackViewport.querySelectorAll('textarea').forEach((ta) => {
+        ta.style.height = 'auto';
+        ta.style.height = `${ta.scrollHeight}px`;
+      });
+    });
+  };
+
+  const palette = ['#fde68a', '#fecaca', '#bfdbfe', '#bbf7d0', '#ddd6fe'];
+  const addNote = () => {
+    const id = `sticky-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const color = palette[workingNotes.length % palette.length];
+    workingNotes.unshift({ id, title: '', body: '', color, pinned: false, createdBy: window.__PMDEK_UID || '', updatedAt: Date.now() });
+    workingNotes = _normalizeStickyNotes(workingNotes);
+    renderNotes();
+    queueSave();
+  };
+
+  lane.innerHTML = `
+    <div class="flex items-center gap-2">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-amber-800">Notes</h3>
+      <button type="button" id="add-sticky-note-btn"
+        class="inline-flex items-center gap-0.5 rounded border border-amber-400 bg-white/75 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-white">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+        </svg>
+        Add
+      </button>
+    </div>
+  `;
+
+  lane.appendChild(notesWrap);
+  lane.querySelector('#add-sticky-note-btn')?.addEventListener('click', addNote);
+  renderNotes();
+  return lane;
 }
 
 /** Applies visual style to the deck color toggle button. */

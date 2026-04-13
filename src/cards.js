@@ -137,6 +137,9 @@ function _applyActiveFilters(cards) {
       return new Date(c.dueDate + 'T00:00:00').getTime() === today.getTime();
     });
   }
+  if (_filterChips.has('my-tasks')) {
+    visible = visible.filter((c) => Array.isArray(c.assignees) && c.assignees.includes(_currentUid));
+  }
 
   return visible;
 }
@@ -746,6 +749,7 @@ export function initCardEvents(user) {
     { id: 'filter-overdue-btn',    key: 'overdue',    activeClass: 'border-red-400 text-red-600 bg-red-50' },
     { id: 'filter-today-btn',      key: 'today',      activeClass: 'border-amber-400 text-amber-600 bg-amber-50' },
     { id: 'filter-recurring-btn',  key: 'recurring',  activeClass: 'border-emerald-400 text-emerald-600 bg-emerald-50' },
+    { id: 'filter-my-tasks-btn',   key: 'my-tasks',   activeClass: 'border-blue-400 text-blue-600 bg-blue-50' },
   ];
   const INACTIVE = 'border-gray-200 bg-white text-gray-500';
 

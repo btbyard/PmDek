@@ -563,13 +563,13 @@ export function openAiBoardModal(user, onCreated) {
 
 /**
  * Seeds a newly-created Weekly board with 5 Day cards in the "Current Week"
- * column. Each card gets 3 starter subtasks (Task 1 / 2 / 3).
+ * column. Each card gets 1 starter subtask (Task 1).
  */
 async function _seedWeeklyBoard(boardId, user) {
   setBoardId(boardId);
   setCurrentUser(user);
   for (let day = 1; day <= 5; day++) {
-    const subtasks = [1, 2, 3].map((n) => ({
+    const subtasks = [1].map((n) => ({
       id: `sub-${Date.now()}-d${day}-t${n}-${Math.random().toString(36).slice(2, 6)}`,
       title: `Task ${n}`,
       completed: false,
