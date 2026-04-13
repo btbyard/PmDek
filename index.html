@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PMDek</title>
+  <title>PMDecks</title>
   <link rel="icon" type="image/svg+xml" href="/spade.svg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -21,9 +21,9 @@
     </div>
 
     <header class="sticky top-0 z-40 w-full bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
-      <div class="flex items-center gap-2">
-        <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-9 w-auto" />
-        <span class="text-xl font-bold tracking-tight text-slate-900">PM<span style="color:#b87900">Dek</span></span>
+      <div class="flex items-center gap-2.5">
+        <img src="/newlogodark.png" alt="PMDecks" class="h-10 w-auto" />
+        <span class="text-xl font-bold tracking-tight text-slate-900"><span class="text-black">PM</span><span style="color:#b87900">Decks</span></span>
       </div>
       <a href="#auth-panel" class="text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors">Sign in</a>
     </header>
@@ -40,7 +40,7 @@
           <span class="block" style="color:#b87900;">not paperwork.</span>
         </h1>
         <p class="mt-5 text-lg text-slate-600 max-w-xl leading-relaxed">
-          PMDek turns plain-English requests into structured boards, tasks, and subtasks so you can plan faster and deliver with confidence.
+          PMDecks turns plain-English requests into structured boards, tasks, and subtasks so you can plan faster and deliver with confidence.
         </p>
 
         <div class="mt-8 flex flex-wrap gap-3">
@@ -76,8 +76,7 @@
       <section id="auth-panel" class="w-full max-w-[440px] lg:ml-auto">
         <div class="rounded-3xl p-8 md:p-9 bg-white border border-slate-200 shadow-[0_20px_45px_rgba(15,23,42,0.12)]">
           <div class="mb-5 flex items-center justify-center gap-2.5">
-            <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-7 w-auto" />
-            <span class="text-lg font-bold tracking-tight text-slate-900">PM<span style="color:#b87900">Dek</span></span>
+            <img src="/newlogodark.png" alt="PMDecks" class="h-32 w-auto" />
           </div>
           <div class="mb-7 text-center">
             <h2 class="text-3xl font-bold text-slate-900">Get started free</h2>
@@ -154,13 +153,16 @@
   <div id="boards-view" class="hidden flex-col h-full">
 
     <header id="boards-header" class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
-      <div id="boards-header-left" class="flex items-center gap-2">
-        <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-9 w-auto" />
-        <span class="text-xl font-bold tracking-tight">
-          <span class="text-brand-500">PM</span><span class="text-gray-800">Dek</span>
-        </span>
+      <div id="boards-header-left" class="flex items-center gap-2.5">
+        <img src="/newlogodark.png" alt="PMDecks" class="h-10 w-auto" />
+        <span class="text-xl font-bold tracking-tight text-slate-900"><span class="text-black">PM</span><span style="color:#b87900">Decks</span></span>
       </div>
       <div id="boards-header-right" class="flex items-center gap-3">
+        <button id="open-organizations-page-btn"
+          class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-sky-900
+                 bg-sky-100 hover:bg-sky-200 border border-sky-300 rounded-lg transition-colors">
+          Organizations
+        </button>
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
         <button id="account-menu-btn-boards" aria-label="Account menu"
@@ -222,17 +224,38 @@
     </main>
   </div>
 
-  <!-- ── 3. Board (Kanban) view ────────────────────────────────────────────── -->
+  <!-- ── 3. Organizations view ────────────────────────────────────────────── -->
+  <div id="organizations-view" class="hidden flex-col h-full">
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button id="back-to-boards-from-orgs"
+          class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Back to Decks
+        </button>
+        <h2 class="text-lg font-semibold text-gray-800">Organizations</h2>
+      </div>
+      <div class="flex items-center gap-2">
+        <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
+        <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
+      </div>
+    </header>
+    <main class="flex-1 overflow-auto p-6 bg-[#f7f8fc]">
+      <div id="organizations-root" class="max-w-6xl mx-auto"></div>
+    </main>
+  </div>
+
+  <!-- ── 4. Board (Kanban) view ────────────────────────────────────────────── -->
   <div id="board-view" class="hidden flex-col h-full">
 
     <header id="board-header" class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
 
-      <div id="board-header-left" class="flex items-center gap-4">
-        <div class="flex items-center gap-2">
-          <img src="/pmdeklogo2-dark.png" alt="PMDek" class="h-8 w-auto" />
-          <span class="text-lg font-bold tracking-tight">
-            <span class="text-brand-500">PM</span><span class="text-gray-800">Dek</span>
-          </span>
+      <div id="board-header-left" class="flex items-center gap-3.5">
+        <div class="flex items-center gap-2.5">
+          <img src="/newlogodark.png" alt="PMDecks" class="h-10 w-auto" />
+          <span class="text-lg font-bold tracking-tight text-slate-900"><span class="text-black">PM</span><span style="color:#b87900">Decks</span></span>
         </div>
         <button id="back-to-boards-btn"
           class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
@@ -266,16 +289,8 @@
         <button id="board-list-view-btn" class="px-2.5 py-1 text-xs font-medium border border-gray-200 text-gray-600 rounded-md hover:bg-gray-50">List View</button>
         <button id="board-calendar-view-btn" class="px-2.5 py-1 text-xs font-medium border border-gray-200 text-gray-600 rounded-md hover:bg-gray-50">Calendar View</button>
         <button id="project-timeline-btn"
-          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500
-                 hover:text-gray-800 border border-gray-200 hover:border-gray-300
-                 bg-white hover:bg-gray-50 rounded-lg transition-colors"
-          title="Project Timeline/Gantt">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-          </svg>
-          Timeline/Gantt
-        </button>
+          class="px-2.5 py-1 text-xs font-medium border border-gray-200 text-gray-600 rounded-md hover:bg-gray-50"
+          title="Project Timeline/Gantt">Timeline/Gantt</button>
         <button id="reset-col-widths-btn"
           class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500
                  hover:text-gray-800 border border-gray-200 hover:border-gray-300
@@ -337,6 +352,14 @@
           </svg>
           Recurring
         </button>
+        <!-- Fullscreen focus -->
+        <button id="fullscreen-focus-btn" title="Fullscreen focus mode"
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-gray-200 bg-white text-gray-500 hover:border-gray-400 hover:text-gray-700 transition-colors">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/>
+          </svg>
+          Full Screen
+        </button>
         <!-- Clear filters -->
         <button id="filter-clear-btn" title="Clear all filters" class="hidden text-xs text-gray-400 hover:text-gray-700 transition-colors px-1">✕ Clear</button>
         <!-- Card count summary -->
@@ -367,7 +390,7 @@
 
   </div>
 
-  <!-- ── 4. AI Dashboard view ─────────────────────────────────────────────── -->
+  <!-- ── 5. AI Dashboard view ─────────────────────────────────────────────── -->
   <div id="ai-dashboard-view" class="hidden flex-col h-full">
     <header id="ai-dashboard-header" class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
       <div id="ai-dashboard-header-left" class="flex items-center gap-3">
@@ -411,23 +434,36 @@
   <!-- AI Chat Sidebar -->
   <aside id="ai-chat-sidebar"
          class="fixed top-0 right-0 bottom-0 w-96 bg-white border-l border-gray-200
-                flex flex-col shadow-2xl z-40
-                translate-x-full transition-transform duration-300 ease-in-out"
+        flex flex-col shadow-2xl z-40 ai-chat-collapsed
+        transition-[width,top] duration-300 ease-in-out"
+      style="display:none"
          aria-label="AI Assistant">
 
+      <button id="ai-chat-resizer"
+        class="absolute left-0 top-0 bottom-0 w-2 -translate-x-1 cursor-ew-resize"
+        aria-label="Resize AI chat"
+        title="Resize AI chat"></button>
+
     <!-- Header -->
-    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-amber-50 flex-shrink-0">
-      <div class="flex items-center gap-2">
-        <span class="text-lg leading-none select-none">✨</span>
+    <div id="ai-chat-header" class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-amber-50 flex-shrink-0">
+      <div id="ai-chat-brand" class="flex items-center gap-2">
+        <span id="ai-chat-icon" class="text-lg leading-none select-none">✨</span>
         <h2 id="ai-chat-title" class="text-sm font-semibold text-amber-900">AI Assistant</h2>
       </div>
       <span id="ai-chat-usage" class="text-[11px] text-amber-800/80 mr-2"></span>
-      <div class="flex items-center gap-1">
+      <div id="ai-chat-header-controls" class="flex items-center gap-1">
         <button id="ai-chat-expand-btn"
                 class="p-1.5 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded-lg transition-colors"
                 aria-label="Collapse AI chat" title="Collapse AI chat">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <button id="ai-chat-pin-btn"
+                class="p-1.5 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded-lg transition-colors"
+                aria-label="Pin AI chat open" title="Pin AI chat open">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 9V4l1-1H7l1 1v5l-2 2v1h5v7h2v-7h5v-1l-2-2z"/>
           </svg>
         </button>
         <button id="ai-chat-close-btn"

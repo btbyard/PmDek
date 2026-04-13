@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <!-- Back-right card (fanned) -->
+  <rect x="58" y="12" width="52" height="72" rx="6" transform="rotate(18 84 48)" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <!-- Back-left card (fanned) -->
+  <rect x="10" y="12" width="52" height="72" rx="6" transform="rotate(-18 36 48)" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+  <!-- Front card -->
+  <rect x="26" y="14" width="68" height="88" rx="7" fill="#0f172a" stroke="#475569" stroke-width="1.5"/>
+  <!-- Spade icon top -->
+  <path d="M60 28c-3 4-12 12-12 18a10 10 0 0018 3 10 10 0 006-3c0-6-9-14-12-18z" fill="white"/>
+  <path d="M60 46v8" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <ellipse cx="55" cy="54" rx="3.5" ry="2.5" fill="white"/>
+  <ellipse cx="65" cy="54" rx="3.5" ry="2.5" fill="white"/>
+  <!-- PM text -->
+  <text x="60" y="82" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="700" font-size="22" fill="white" letter-spacing="-0.5">PM</text>
+  <!-- Bottom decorative line -->
+  <line x1="40" y1="90" x2="80" y2="90" stroke="#64748b" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

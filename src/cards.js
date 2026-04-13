@@ -24,6 +24,7 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
+  getDoc,
   doc,
   serverTimestamp,
 } from 'firebase/firestore';
@@ -319,6 +320,18 @@ export function renderCalendarView() {
  */
 export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null, recurring = false, recurrenceFrequency = null, startDate = null) {
   const boardId = getBoardId();
+  let resolvedCardBgColor = cardBgColor || null;
+
+  // If caller did not provide a task color, inherit the board-level task color.
+  if (!resolvedCardBgColor) {
+    try {
+      const boardSnap = await getDoc(doc(db, 'boards', boardId));
+      resolvedCardBgColor = boardSnap.exists() ? (boardSnap.data()?.taskBgColor || null) : null;
+    } catch (_) {
+      resolvedCardBgColor = null;
+    }
+  }
+
   const ref = await addDoc(collection(db, 'cards'), {
     boardId,
     userId:      auth_uid(),
@@ -334,7 +347,7 @@ export async function createCard(columnId, title, description = '', order = 0, c
     recurrenceFrequency: recurring ? (recurrenceFrequency || 'weekly') : null,
     attachments: attachments,
     cardColor:   cardColor || null,
-    cardBgColor: cardBgColor || null,
+    cardBgColor: resolvedCardBgColor,
     order,
     cardHeight: 82,
     createdAt:   serverTimestamp(),
@@ -1530,7 +1543,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-xl md:max-w-2xl lg:max-w-3xl max-h-[90vh] overflow-y-auto p-6">
         <h3 class="text-lg font-semibold text-gray-800 mb-4">${isEdit ? 'Edit card' : 'New card'}</h3>
         <form id="card-form" class="flex flex-col gap-4">
           <div>

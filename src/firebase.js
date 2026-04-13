@@ -1,7 +1,7 @@
 /**
  * @module firebase
  * @description
- * Single entry point for all Firebase services used by PMDek.
+ * Single entry point for all Firebase services used by PMDecks.
  *
  * Design decision: one module initialises Firebase exactly once and re-exports
  * the service singletons. Every other module imports from here — this means

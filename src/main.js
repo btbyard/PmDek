@@ -22,12 +22,12 @@ import {
 import { renderBoard, setBoardId, createColumnBlock, resetColumnWidths } from './board.js';
 import { subscribeToCards, unsubscribeFromCards, initCardEvents, setBoardAssignedMembers, renderListView, renderCalendarView, getCardsSnapshot } from './cards.js';
 import { renderBoardsHome, openCreateBoardModal }                 from './boards-home.js';
-import { initAiChat, setAiChatMode, toggleAiChat, openAiChatWithPrompt, collapseAiChat } from './ai-chat.js';
+import { initAiChat, setAiChatMode, openAiChatWithPrompt, collapseAiChat, expandAiChat } from './ai-chat.js';
 import { doc, getDoc }                                             from 'firebase/firestore';
 import { db }                                                      from './firebase.js';
 import { ensureUserProfile, claimUsername, validateUsername, checkUsernameAvailable, updateUserDisplayName, getUserProfile, getAllUsers, setUserAdminStatus } from './users.js';
 import { createOrg, getOrgById, getOrgMembers, addMemberByUsername, removeMember, setOrgMemberAdminStatus, getAllOrganizations } from './org.js';
-import { BILLING_PLANS, getUserPlan, ensureBillingDefaults }      from './billing.js';
+import { BILLING_PLANS, getUserPlan, getUserBillingContext, canCreateOrganization, ensureBillingDefaults }      from './billing.js';
 import { httpsCallable }                                           from 'firebase/functions';
 import { functions }                                               from './firebase.js';
 
@@ -44,6 +44,7 @@ let _emailMode = 'signin'; // 'signin' | 'register'
 let _boardsList = [];
 let _currentBoardId = null;
 let _boardViewMode = 'kanban';
+let _activeViewName = 'landing';
 
 // ─── Auth lifecycle ───────────────────────────────────────────────────────────
 
@@ -98,8 +99,16 @@ document.getElementById('create-board-btn')?.addEventListener('click', () => {
   openCreateBoardModal(_user, (boardId, title) => _openBoard(boardId, title));
 });
 
+document.getElementById('open-organizations-page-btn')?.addEventListener('click', () => {
+  _openOrganizationsPage();
+});
+
+document.getElementById('back-to-boards-from-orgs')?.addEventListener('click', async () => {
+  await _showBoardsHome();
+});
+
 document.getElementById('ai-board-btn')?.addEventListener('click', () => {
-  toggleAiChat();
+  expandAiChat();
 });
 
 // ─── Board (Kanban) view ──────────────────────────────────────────────────────
@@ -222,6 +231,7 @@ function _renderAiDashboardPage() {
   const done = doneCards.length;
   const overdue = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') < today);
   const dueSoon = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') >= today && new Date(c.dueDate + 'T00:00:00') <= in7);
+  const due14 = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') > in7 && new Date(c.dueDate + 'T00:00:00') <= in14);
   const recurring = openCards.filter((c) => Boolean(c.recurring));
   const noDueDate = openCards.filter((c) => !c.dueDate);
   const blocked = openCards.filter((c) => /blocked|risk|hold|waiting/i.test(String(c.columnId || '')));
@@ -236,6 +246,24 @@ function _renderAiDashboardPage() {
 
   const allSubtasks = cards.flatMap((c) => Array.isArray(c.subtasks) ? c.subtasks : []);
   const openSubtasks = allSubtasks.filter((s) => !s.completed);
+  const sortByDue = (items) => [...items].sort((a, b) => {
+    const aDue = a?.dueDate ? new Date(`${a.dueDate}T00:00:00`).getTime() : Number.MAX_SAFE_INTEGER;
+    const bDue = b?.dueDate ? new Date(`${b.dueDate}T00:00:00`).getTime() : Number.MAX_SAFE_INTEGER;
+    return aDue - bDue;
+  });
+  const unassignedOpenCards = openCards.filter((c) => !Array.isArray(c.assignees) || c.assignees.length === 0);
+  const unassignedOpenSubtasks = openSubtasks.filter((s) => !s.assignee);
+  const complexDueSoon = openCards.filter((c) => {
+    const openCount = Array.isArray(c.subtasks) ? c.subtasks.filter((s) => !s.completed).length : 0;
+    return openCount >= 3 && c.dueDate && new Date(c.dueDate + 'T00:00:00') <= in7;
+  });
+  const atRiskExecution = openCards.filter((c) => {
+    const subtasks = Array.isArray(c.subtasks) ? c.subtasks : [];
+    if (!subtasks.length || !c.dueDate) return false;
+    const doneSubs = subtasks.filter((s) => s.completed).length;
+    const progress = doneSubs / subtasks.length;
+    return progress < 0.35 && new Date(c.dueDate + 'T00:00:00') <= in7;
+  });
 
   const workloadMap = new Map();
   cards.forEach((c) => {
@@ -279,39 +307,144 @@ function _renderAiDashboardPage() {
   }
   const peakLoad = Math.max(1, ...forecastBuckets.map((b) => b.count));
 
-  const recs = [];
-  if (overdue.length > 0) recs.push(`Clear ${overdue.length} overdue task${overdue.length === 1 ? '' : 's'} immediately.`);
-  if (dueSoon.length > 0) recs.push(`Prioritize ${dueSoon.length} task${dueSoon.length === 1 ? '' : 's'} due in the next 7 days.`);
-  if (noDueDate.length > 0) recs.push(`Assign due dates to ${noDueDate.length} open task${noDueDate.length === 1 ? '' : 's'} to improve forecasting.`);
-  if (blocked.length > 0) recs.push(`Unblock ${blocked.length} task${blocked.length === 1 ? '' : 's'} currently marked blocked/risk/hold.`);
-  if (recurring.length > 0) recs.push(`Batch-plan ${recurring.length} recurring task${recurring.length === 1 ? '' : 's'} for this week.`);
-  if (topWorkload[0] && topWorkload[0].tasks >= 5) recs.push(`Redistribute workload from ${_escHtml(topWorkload[0].owner)} to avoid bottlenecks.`);
+  const recommendationCandidates = [];
+  const pushRec = (score, html, plain) => recommendationCandidates.push({ score, html, plain: plain || html });
 
-  const overdueNames = overdue.slice(0, 4).map((c) => c.title || 'Untitled').join(', ');
-  const dueSoonNames = dueSoon.slice(0, 5).map((c) => `${c.title || 'Untitled'} (${c.dueDate || 'no date'})`).join(', ');
-  const blockedNames = blocked.slice(0, 4).map((c) => c.title || 'Untitled').join(', ');
-  const sprintNames = openCards
-    .filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') <= in14)
-    .slice(0, 6)
-    .map((c) => `${c.title || 'Untitled'} (${c.dueDate || 'no date'})`)
+  const listTaskNames = (items, max = 5) => items
+    .slice(0, max)
+    .map((c) => `<strong class="text-gray-900 font-semibold">${_escHtml(c.title || 'Untitled')}</strong>${c.dueDate ? ` <span class="text-gray-400">(${_escHtml(c.dueDate)})</span>` : ''}`)
+    .join(', ');
+  const listSubtaskNames = (items, max = 5) => items
+    .slice(0, max)
+    .map((s) => `<strong class="text-gray-900 font-semibold">${_escHtml(s.title || 'Untitled subtask')}</strong>`)
+    .join(', ');
+  // Plain text versions for AI prompts (no HTML)
+  const listTaskNamesPlain = (items, max = 5) => items
+    .slice(0, max)
+    .map((c) => `${c.title || 'Untitled'}${c.dueDate ? ` (${c.dueDate})` : ''}`)
+    .join(', ');
+  const listSubtaskNamesPlain = (items, max = 5) => items
+    .slice(0, max)
+    .map((s) => s.title || 'Untitled subtask')
     .join(', ');
 
-  const quickPrompts = [
-    overdue.length
-      ? `Build a 3-day recovery plan for these overdue tasks: ${overdueNames}.`
-      : 'No tasks are overdue. What should I improve next for schedule risk?',
-    dueSoon.length
-      ? `Rank these due-soon tasks by risk and urgency, and explain why: ${dueSoonNames}.`
-      : 'No tasks are due in the next 7 days. What should I pull forward?',
-    blocked.length
-      ? `Give mitigation steps for these blocked tasks: ${blockedNames}.`
-      : 'No blocked tasks found. What are likely hidden blockers to check?',
-    sprintNames
-      ? `Create a 14-day execution plan for: ${sprintNames}.`
-      : 'Create a 14-day sprint plan for the highest-value open tasks in this deck.',
-  ];
+  if (overdue.length > 0) {
+    pushRec(100 + overdue.length,
+      `Clear ${overdue.length} overdue task${overdue.length === 1 ? '' : 's'} immediately: ${listTaskNames(sortByDue(overdue), 4)}.`,
+      `Clear ${overdue.length} overdue task${overdue.length === 1 ? '' : 's'} immediately: ${listTaskNamesPlain(sortByDue(overdue), 4)}.`);
+  }
+  if (blocked.length > 0) {
+    pushRec(92 + blocked.length,
+      `Unblock ${blocked.length} task${blocked.length === 1 ? '' : 's'} currently marked blocked, risk, hold, or waiting: ${listTaskNames(sortByDue(blocked), 4)}.`,
+      `Unblock ${blocked.length} task${blocked.length === 1 ? '' : 's'} currently marked blocked, risk, hold, or waiting: ${listTaskNamesPlain(sortByDue(blocked), 4)}.`);
+  }
+  if (complexDueSoon.length > 0) {
+    pushRec(88 + complexDueSoon.length,
+      `Break down ${complexDueSoon.length} due-soon task${complexDueSoon.length === 1 ? '' : 's'} with 3+ open subtasks so execution is easier to manage this week: ${listTaskNames(sortByDue(complexDueSoon), 4)}.`,
+      `Break down ${complexDueSoon.length} due-soon task${complexDueSoon.length === 1 ? '' : 's'} with 3+ open subtasks so execution is easier to manage this week: ${listTaskNamesPlain(sortByDue(complexDueSoon), 4)}.`);
+  }
+  if (atRiskExecution.length > 0) {
+    pushRec(84 + atRiskExecution.length,
+      `Escalate ${atRiskExecution.length} due-soon task${atRiskExecution.length === 1 ? '' : 's'} with low subtask completion progress before they slip: ${listTaskNames(sortByDue(atRiskExecution), 4)}.`,
+      `Escalate ${atRiskExecution.length} due-soon task${atRiskExecution.length === 1 ? '' : 's'} with low subtask completion progress before they slip: ${listTaskNamesPlain(sortByDue(atRiskExecution), 4)}.`);
+  }
+  if (dueSoon.length > 0) {
+    pushRec(80 + dueSoon.length,
+      `Prioritize ${dueSoon.length} task${dueSoon.length === 1 ? '' : 's'} due in the next 7 days: ${listTaskNames(sortByDue(dueSoon), 5)}.`,
+      `Prioritize ${dueSoon.length} task${dueSoon.length === 1 ? '' : 's'} due in the next 7 days: ${listTaskNamesPlain(sortByDue(dueSoon), 5)}.`);
+  }
+  if (unassignedOpenCards.length > 0) {
+    pushRec(76 + unassignedOpenCards.length,
+      `Assign owners to ${unassignedOpenCards.length} open task${unassignedOpenCards.length === 1 ? '' : 's'} so accountability is clear: ${listTaskNames(unassignedOpenCards, 5)}.`,
+      `Assign owners to ${unassignedOpenCards.length} open task${unassignedOpenCards.length === 1 ? '' : 's'} so accountability is clear: ${listTaskNamesPlain(unassignedOpenCards, 5)}.`);
+  }
+  if (unassignedOpenSubtasks.length > 0) {
+    pushRec(72 + Math.min(unassignedOpenSubtasks.length, 10),
+      `Assign owners to ${unassignedOpenSubtasks.length} open subtask${unassignedOpenSubtasks.length === 1 ? '' : 's'} to reduce hidden coordination risk: ${listSubtaskNames(unassignedOpenSubtasks, 6)}.`,
+      `Assign owners to ${unassignedOpenSubtasks.length} open subtask${unassignedOpenSubtasks.length === 1 ? '' : 's'} to reduce hidden coordination risk: ${listSubtaskNamesPlain(unassignedOpenSubtasks, 6)}.`);
+  }
+  if (noDueDate.length > 0) {
+    pushRec(68 + noDueDate.length,
+      `Assign due dates to ${noDueDate.length} open task${noDueDate.length === 1 ? '' : 's'} to improve forecasting: ${listTaskNames(noDueDate, 5)}.`,
+      `Assign due dates to ${noDueDate.length} open task${noDueDate.length === 1 ? '' : 's'} to improve forecasting: ${listTaskNamesPlain(noDueDate, 5)}.`);
+  }
+  if (recurring.length > 0) {
+    pushRec(58 + recurring.length,
+      `Batch-plan ${recurring.length} recurring task${recurring.length === 1 ? '' : 's'} for this week so they stop competing with urgent work: ${listTaskNames(recurring, 5)}.`,
+      `Batch-plan ${recurring.length} recurring task${recurring.length === 1 ? '' : 's'} for this week so they stop competing with urgent work: ${listTaskNamesPlain(recurring, 5)}.`);
+  }
+  if (topWorkload[0] && topWorkload[0].tasks >= 5) {
+    pushRec(74 + Math.round(topWorkload[0].tasks), `Redistribute workload from <strong class="text-gray-900 font-semibold">${_escHtml(topWorkload[0].owner)}</strong> to avoid a delivery bottleneck.`,
+      `Redistribute workload from ${topWorkload[0].owner} to avoid a delivery bottleneck.`);
+  }
+
+  const recs = recommendationCandidates
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
+
+  const quickActionCandidates = [];
+  const pushQuickAction = (score, prompt) => quickActionCandidates.push({ score, prompt });
+
+  if (overdue.length) {
+    pushQuickAction(100 + overdue.length, `Build a recovery plan for these overdue tasks and tell me what to do first today: ${listTaskNamesPlain(sortByDue(overdue), 4)}.`);
+  }
+  if (blocked.length) {
+    pushQuickAction(95 + blocked.length, `Give me unblock actions for these blocked or at-risk tasks: ${listTaskNamesPlain(sortByDue(blocked), 4)}.`);
+  }
+  if (complexDueSoon.length) {
+    pushQuickAction(90 + complexDueSoon.length, `Break these due-soon tasks into a safer execution order and explain the risk: ${listTaskNamesPlain(sortByDue(complexDueSoon), 4)}.`);
+  }
+  if (atRiskExecution.length) {
+    pushQuickAction(86 + atRiskExecution.length, `Which of these tasks are most likely to slip based on their open subtasks, and what should I do next: ${listTaskNamesPlain(sortByDue(atRiskExecution), 4)}.`);
+  }
+  if (dueSoon.length) {
+    pushQuickAction(82 + dueSoon.length, `Rank these due-soon tasks by urgency and explain why: ${listTaskNamesPlain(sortByDue(dueSoon), 5)}.`);
+  }
+  if (unassignedOpenCards.length) {
+    pushQuickAction(78 + unassignedOpenCards.length, `Suggest owners or next actions for these unassigned tasks: ${listTaskNamesPlain(unassignedOpenCards, 5)}.`);
+  }
+  if (unassignedOpenSubtasks.length) {
+    pushQuickAction(74 + Math.min(unassignedOpenSubtasks.length, 10), `Help me assign and sequence these open subtasks: ${listSubtaskNamesPlain(unassignedOpenSubtasks, 6)}.`);
+  }
+  if (noDueDate.length) {
+    pushQuickAction(70 + noDueDate.length, `Recommend due dates and sequencing for these undated tasks: ${listTaskNamesPlain(noDueDate, 5)}.`);
+  }
+  if (recurring.length) {
+    pushQuickAction(64 + recurring.length, `Plan this week's recurring work so it does not interfere with urgent tasks: ${listTaskNamesPlain(recurring, 5)}.`);
+  }
+  if (due14.length) {
+    pushQuickAction(60 + due14.length, `Create a 14-day execution plan for these upcoming tasks: ${listTaskNamesPlain(sortByDue(due14), 6)}.`);
+  }
+
+  const quickPrompts = quickActionCandidates
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.prompt)
+    .filter((prompt, index, arr) => arr.indexOf(prompt) === index)
+    .slice(0, 4);
+
+  if (!quickPrompts.length) {
+    quickPrompts.push(
+      'Analyze the current board and tell me the next best action to reduce delivery risk.',
+      'Suggest the best 14-day execution plan for the current open tasks.',
+      'Find hidden risks in the current project and explain what I should check next.',
+      'Tell me which tasks should be prioritized first and why.'
+    );
+  }
 
   const healthTone = healthScore >= 80 ? 'text-emerald-600' : healthScore >= 60 ? 'text-amber-600' : 'text-rose-600';
+  const healthBreakdown = {
+    healthScore,
+    total,
+    done,
+    open: openCards.length,
+    overdue: overdue.length,
+    blocked: blocked.length,
+    noDueDate: noDueDate.length,
+    completionRate,
+    overdueRate,
+    noDueRate,
+    blockedRate,
+  };
 
   root.innerHTML = `
     <div class="w-full rounded-2xl overflow-hidden border border-gray-200 bg-white text-gray-800 shadow-sm">
@@ -324,7 +457,10 @@ function _renderAiDashboardPage() {
           </div>
           <div class="text-right">
             <p class="text-xs text-gray-500">Health Score</p>
-            <p class="text-3xl font-bold ${healthTone}">${healthScore}</p>
+            <button id="health-score-btn" class="inline-flex flex-col items-end rounded-lg px-2 py-1 hover:bg-white/70 transition-colors" title="See how this score is calculated">
+              <span class="text-3xl font-bold ${healthTone}">${healthScore}</span>
+              <span class="text-[10px] text-gray-500">How it's calculated</span>
+            </button>
           </div>
         </div>
       </div>
@@ -349,13 +485,13 @@ function _renderAiDashboardPage() {
             <span class="text-[11px] text-gray-500">Auto-generated</span>
           </div>
           <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
-            ${(recs.length ? recs : ['No major risks detected. Keep momentum and close open due-soon tasks.']).map((r, i) => `
+            ${(recs.length ? recs : [{ html: 'No major risks detected. Keep momentum and close open due-soon tasks.', plain: '' }]).map((r, i) => `
               <div class="rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2">
                 <div class="flex items-start justify-between gap-3">
-                  <p class="text-sm text-gray-700"><span class="text-amber-700 mr-1">${i + 1}.</span>${_escHtml(r)}</p>
-                  <button class="ai-dash-ask-btn flex-shrink-0 px-2 py-1 text-[11px] font-medium text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-md transition-colors" data-prompt="Explain this recommendation and give me exact next actions: ${_escHtml(r)}">
+                  <p class="text-sm text-gray-700"><span class="text-amber-700 mr-1">${i + 1}.</span>${r.html}</p>
+                  ${r.plain ? `<button class="ai-dash-ask-btn flex-shrink-0 px-2 py-1 text-[11px] font-medium text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-md transition-colors" data-prompt="Explain this recommendation and give me exact next actions: ${_escHtml(r.plain)}">
                     Ask AI
-                  </button>
+                  </button>` : ''}
                 </div>
               </div>`).join('')}
           </div>
@@ -450,6 +586,98 @@ function _renderAiDashboardPage() {
       const prompt = btn.dataset.prompt || '';
       openAiChatWithPrompt(prompt, { expand: true });
     });
+  });
+
+  root.querySelector('#health-score-btn')?.addEventListener('click', () => {
+    _openHealthScoreModal(healthBreakdown);
+  });
+}
+
+function _openHealthScoreModal(stats) {
+  const modalRoot = document.getElementById('modal-root');
+  if (!modalRoot) return;
+
+  const completionImpact = Math.round((stats.completionRate * 0.45) * 100) / 100;
+  const overdueImpact = Math.round((stats.overdueRate * 0.45) * 100) / 100;
+  const noDueImpact = Math.round((stats.noDueRate * 0.25) * 100) / 100;
+  const blockedImpact = Math.round((stats.blockedRate * 0.2) * 100) / 100;
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[88vh] overflow-y-auto p-6">
+        <div class="flex items-start justify-between gap-4 mb-4">
+          <div>
+            <h3 class="text-lg font-semibold text-gray-800">Health Score Breakdown</h3>
+            <p class="text-sm text-gray-500 mt-1">This score is calculated from the current open project state, not a static value.</p>
+          </div>
+          <button id="health-score-close" class="text-gray-400 hover:text-gray-700">Close</button>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+          ${[
+            ['Health Score', stats.healthScore],
+            ['Open Tasks', stats.open],
+            ['Completed Tasks', stats.done],
+            ['Total Tasks', stats.total],
+          ].map(([label, value]) => `<div class="rounded-lg border border-gray-200 bg-gray-50 p-3"><p class="text-[11px] text-gray-500">${label}</p><p class="text-xl font-semibold text-gray-800">${value}</p></div>`).join('')}
+        </div>
+
+        <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-4 mb-5">
+          <p class="text-sm font-medium text-gray-800 mb-2">Formula used</p>
+          <p class="text-sm text-gray-600">Health Score = clamp(0, 100, 55 + completion contribution - overdue penalty - no-date penalty - blocked penalty)</p>
+          <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+            <div class="rounded-md bg-white border border-gray-200 px-3 py-2">
+              <p class="font-medium text-gray-800">Completion contribution</p>
+              <p class="text-gray-600 mt-1">${stats.completionRate}% complete × 0.45 = +${completionImpact}</p>
+            </div>
+            <div class="rounded-md bg-white border border-gray-200 px-3 py-2">
+              <p class="font-medium text-gray-800">Overdue penalty</p>
+              <p class="text-gray-600 mt-1">${stats.overdueRate}% overdue × 0.45 = -${overdueImpact}</p>
+            </div>
+            <div class="rounded-md bg-white border border-gray-200 px-3 py-2">
+              <p class="font-medium text-gray-800">Missing due date penalty</p>
+              <p class="text-gray-600 mt-1">${stats.noDueRate}% undated × 0.25 = -${noDueImpact}</p>
+            </div>
+            <div class="rounded-md bg-white border border-gray-200 px-3 py-2">
+              <p class="font-medium text-gray-800">Blocked penalty</p>
+              <p class="text-gray-600 mt-1">${stats.blockedRate}% blocked × 0.20 = -${blockedImpact}</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+          <div class="rounded-lg border border-gray-200 p-4">
+            <p class="text-sm font-medium text-gray-800 mb-2">Current project inputs</p>
+            <ul class="space-y-1 text-sm text-gray-600">
+              <li>Open tasks: ${stats.open}</li>
+              <li>Completed tasks: ${stats.done}</li>
+              <li>Overdue tasks: ${stats.overdue}</li>
+              <li>Blocked tasks: ${stats.blocked}</li>
+              <li>Open tasks without due date: ${stats.noDueDate}</li>
+            </ul>
+          </div>
+          <div class="rounded-lg border border-gray-200 p-4">
+            <p class="text-sm font-medium text-gray-800 mb-2">What improves the score fastest</p>
+            <ul class="space-y-1 text-sm text-gray-600">
+              <li>Complete overdue work or re-baseline it realistically.</li>
+              <li>Add due dates to undated open tasks.</li>
+              <li>Unblock tasks stuck in blocked, hold, or waiting states.</li>
+              <li>Close high-progress tasks to increase completion rate.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="flex justify-end">
+          <button id="health-score-ok" class="px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors">Close</button>
+        </div>
+      </div>
+    </div>`;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('health-score-close')?.addEventListener('click', close);
+  document.getElementById('health-score-ok')?.addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
   });
 }
 
@@ -550,7 +778,7 @@ document.getElementById('ai-dashboard-deck-next-btn')?.addEventListener('click',
 });
 
 document.getElementById('ai-trigger-btn')?.addEventListener('click', () => {
-  toggleAiChat();
+  expandAiChat();
 });
 
 document.getElementById('board-kanban-view-btn')?.addEventListener('click', () => _applyBoardView('kanban'));
@@ -597,7 +825,7 @@ const _BOARD_HELP_STEPS = [
   '4. Use quotes around card titles when possible for exact matching.',
 ];
 
-function _openAiHelpModal(examples, heading, steps = []) {
+function _openAiHelpModal(examples, heading, steps = [], hint = '') {
   const modalRoot = document.getElementById('modal-root');
   const items = examples.map((ex) => `
     <li class="flex items-start gap-2 text-sm text-gray-700">
@@ -621,6 +849,7 @@ function _openAiHelpModal(examples, heading, steps = []) {
             <ol class="list-decimal pl-4 space-y-1">${stepsHtml}</ol>
           </div>
         ` : ''}
+        ${hint ? `<p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">${hint}</p>` : ''}
         <p class="text-xs text-gray-500 mb-3">Here are some example prompts you can type in the AI chat:</p>
         <ul class="flex flex-col gap-2.5 mb-5">${items}</ul>
         <div class="flex justify-end">
@@ -650,6 +879,45 @@ document.getElementById('reset-col-widths-btn')?.addEventListener('click', () =>
 
 document.getElementById('project-timeline-btn')?.addEventListener('click', () => {
   _applyBoardView('timeline');
+});
+
+// ─── Fullscreen focus mode ────────────────────────────────────────────────────
+let _isFullscreen = false;
+document.getElementById('fullscreen-focus-btn')?.addEventListener('click', () => {
+  _isFullscreen = !_isFullscreen;
+  const boardView = document.getElementById('board-view');
+  const header = document.getElementById('board-header');
+  const searchBar = document.getElementById('board-search-bar');
+  const aiSidebar = document.getElementById('ai-chat-sidebar');
+
+  if (_isFullscreen) {
+    // hide header and search bar
+    if (header) header.style.display = 'none';
+    if (searchBar) searchBar.style.display = 'none';
+    if (aiSidebar) aiSidebar.style.display = 'none';
+    // inject close button
+    let closeBtn = document.getElementById('fullscreen-exit-btn');
+    if (!closeBtn) {
+      closeBtn = document.createElement('button');
+      closeBtn.id = 'fullscreen-exit-btn';
+      closeBtn.title = 'Exit fullscreen';
+      closeBtn.className = 'fixed top-4 right-4 z-[9999] flex items-center justify-center w-9 h-9 rounded-full bg-red-600 hover:bg-red-700 text-white shadow-lg transition-colors';
+      closeBtn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>';
+      closeBtn.addEventListener('click', () => {
+        document.getElementById('fullscreen-focus-btn')?.click();
+      });
+      boardView?.appendChild(closeBtn);
+    }
+    closeBtn.style.display = 'flex';
+  } else {
+    // restore header and search bar
+    if (header) header.style.display = '';
+    if (searchBar) searchBar.style.display = '';
+    if (aiSidebar) aiSidebar.style.display = '';
+    _syncAiChatSidebar(_activeViewName);
+    const closeBtn = document.getElementById('fullscreen-exit-btn');
+    if (closeBtn) closeBtn.style.display = 'none';
+  }
 });
 
 function _readLocalCompletionLogs(boardId) {
@@ -743,6 +1011,113 @@ async function _renderTimelineInPage() {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   });
 
+  // Build month boundaries for grid lines, header labels, and weekly dotted lines
+  const monthBoundaries = [];
+  const monthLabels = [];
+  const weekLines = [];
+  const weekLabels = [];
+  {
+    const cursor = new Date(minStart.getFullYear(), minStart.getMonth(), 1);
+
+    // First label for the starting month
+    const firstMidDay = Math.round(((new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate()) / 2));
+    const firstMid = new Date(cursor.getFullYear(), cursor.getMonth(), firstMidDay);
+    if (firstMid >= minStart && firstMid <= maxEnd) {
+      const midPct = ((firstMid - minStart) / MS_DAY / rangeDays) * 100;
+      monthLabels.push({ label: cursor.toLocaleDateString(undefined, { month: 'short', year: '2-digit' }), pct: midPct });
+    }
+
+    // Collect all week starts (1st, 8th, 15th, 22nd) for first month
+    {
+      const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+      const weekStarts = [1, 8, 15, 22];
+      for (let wi = 0; wi < weekStarts.length; wi++) {
+        const weekDay = new Date(monthStart.getFullYear(), monthStart.getMonth(), weekStarts[wi]);
+        if (weekDay >= minStart && weekDay <= maxEnd && weekDay.getMonth() === monthStart.getMonth()) {
+          const wPct = ((weekDay - minStart) / MS_DAY / rangeDays) * 100;
+          // Week line (skip the 1st since it's a month boundary)
+          if (weekStarts[wi] > 1 && wPct > 0.5 && wPct < 99.5) weekLines.push(wPct);
+          // Week label centered between this week start and the next boundary
+          const nextBound = wi < weekStarts.length - 1
+            ? new Date(monthStart.getFullYear(), monthStart.getMonth(), weekStarts[wi + 1])
+            : new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1);
+          const endBound = nextBound <= maxEnd ? nextBound : maxEnd;
+          const midPct = (((weekDay.getTime() + endBound.getTime()) / 2 - minStart.getTime()) / MS_DAY / rangeDays) * 100;
+          if (midPct >= 0 && midPct <= 100) {
+            weekLabels.push({ label: weekDay.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), pct: midPct });
+          }
+        }
+      }
+    }
+
+    cursor.setMonth(cursor.getMonth() + 1);
+    while (cursor <= maxEnd) {
+      const dayOffset = (cursor - minStart) / MS_DAY;
+      const pct = (dayOffset / rangeDays) * 100;
+      if (pct > 0 && pct < 100) {
+        monthBoundaries.push(pct);
+      }
+      // Label at mid-month
+      const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+      const midDay = Math.round(daysInMonth / 2);
+      const midDate = new Date(cursor.getFullYear(), cursor.getMonth(), midDay);
+      if (midDate <= maxEnd) {
+        const midPct = ((midDate - minStart) / MS_DAY / rangeDays) * 100;
+        monthLabels.push({ label: cursor.toLocaleDateString(undefined, { month: 'short', year: '2-digit' }), pct: midPct });
+      }
+      // Weekly lines and labels within this month
+      const weekStarts = [1, 8, 15, 22];
+      for (let wi = 0; wi < weekStarts.length; wi++) {
+        const weekDay = new Date(cursor.getFullYear(), cursor.getMonth(), weekStarts[wi]);
+        if (weekDay <= maxEnd && weekDay.getMonth() === cursor.getMonth()) {
+          const wPct = ((weekDay - minStart) / MS_DAY / rangeDays) * 100;
+          if (weekStarts[wi] > 1 && wPct > 0.5 && wPct < 99.5) weekLines.push(wPct);
+          const nextBound = wi < weekStarts.length - 1
+            ? new Date(cursor.getFullYear(), cursor.getMonth(), weekStarts[wi + 1])
+            : new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+          const endBound = nextBound <= maxEnd ? nextBound : maxEnd;
+          const midPct = (((weekDay.getTime() + endBound.getTime()) / 2 - minStart.getTime()) / MS_DAY / rangeDays) * 100;
+          if (midPct >= 0 && midPct <= 100) {
+            weekLabels.push({ label: weekDay.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), pct: midPct });
+          }
+        }
+      }
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+  }
+
+  const monthLinesHtml = monthBoundaries.map((pct) =>
+    `<div class="absolute top-0 bottom-0" style="left:${pct}%;width:1.5px;background:rgba(107,114,128,0.45)"></div>`
+  ).join('');
+
+  const weekLinesHtml = weekLines.map((pct) =>
+    `<div class="absolute top-0 bottom-0" style="left:${pct}%;width:0;border-left:1px dashed rgba(156,163,175,0.45)"></div>`
+  ).join('');
+
+  // Lighter week tick marks for the dark header
+  const weekLinesHeaderHtml = weekLines.map((pct) =>
+    `<div class="absolute top-0 bottom-0" style="left:${pct}%;width:0;border-left:1px solid rgba(148,163,184,0.3)"></div>`
+  ).join('');
+
+  const monthLabelsHtml = monthLabels.map((m) =>
+    `<span class="absolute text-[10px] font-semibold text-gray-500 whitespace-nowrap" style="left:${m.pct}%;transform:translateX(-50%)">${_escHtml(m.label)}</span>`
+  ).join('');
+
+  const weekLabelsHtml = weekLabels.map((w) =>
+    `<span class="absolute text-[9px] text-gray-300 whitespace-nowrap" style="left:${w.pct}%;transform:translateX(-50%)">${_escHtml(w.label)}</span>`
+  ).join('');
+
+  // Alternating month background bands — light / slightly darker
+  const monthBands = [];
+  {
+    const allEdges = [0, ...monthBoundaries, 100];
+    for (let i = 0; i < allEdges.length - 1; i++) {
+      const bg = i % 2 === 0 ? 'rgba(249,250,251,0.8)' : 'rgba(229,231,235,0.35)';
+      monthBands.push(`<div class="absolute top-0 bottom-0" style="left:${allEdges[i]}%;width:${allEdges[i + 1] - allEdges[i]}%;background:${bg}"></div>`);
+    }
+  }
+  const monthBandsHtml = monthBands.join('');
+
   const lanes = rows.map((r) => {
     const leftDays = Math.round((r.start - minStart) / MS_DAY);
     const spanDays = Math.max(1, Math.round((r.end - r.start) / MS_DAY) + 1);
@@ -759,7 +1134,8 @@ async function _renderTimelineInPage() {
           <p class="text-sm font-medium text-gray-800 truncate">${_escHtml(r.title)}</p>
           <p class="text-[11px] text-gray-500">${_escHtml(r.startDate || 'Auto')} → ${_escHtml(r.dueDate)} • ${statusText}</p>
         </div>
-        <div class="relative h-7 rounded bg-gray-100 overflow-hidden">
+        <div class="relative h-7 rounded overflow-hidden" style="background:transparent">
+          ${monthBandsHtml}${weekLinesHtml}${monthLinesHtml}
           <div class="absolute inset-y-1 rounded bg-gradient-to-r ${barClass}" style="left:${leftPct}%;width:${widthPct}%">
             <div class="h-full bg-black/10" style="width:${Math.max(6, r.progress)}%"></div>
           </div>
@@ -769,11 +1145,11 @@ async function _renderTimelineInPage() {
 
   body.innerHTML = `
     <div class="rounded-xl border border-gray-200 bg-white overflow-hidden">
-      <div class="px-4 py-3 border-b border-gray-100 bg-gray-50 text-sm font-medium text-gray-700">Project Timeline/Gantt</div>
-      <div class="px-4 pt-3 pb-2 border-b border-gray-100">
-        <div class="grid" style="grid-template-columns:220px 1fr;gap:0.75rem;">
-          <div></div>
-          <div class="flex justify-between text-[10px] text-gray-500">${ticks.map((t) => `<span>${_escHtml(t)}</span>`).join('')}</div>
+      <div class="px-4 py-2.5 border-b border-gray-200 bg-gray-800 flex items-end gap-3">
+        <span class="text-sm font-semibold text-white whitespace-nowrap" style="width:220px">Project Timeline/Gantt</span>
+        <div class="relative h-5 flex-1 overflow-hidden">
+          ${weekLinesHeaderHtml}
+          ${weekLabelsHtml}
         </div>
       </div>
       <div class="max-h-[65vh] overflow-y-auto px-4 py-2">${lanes}</div>
@@ -1031,7 +1407,7 @@ function _openAccountMenu(triggerBtn) {
   menu.style.top  = `${rect.bottom + 6}px`;
   menu.style.right = `${window.innerWidth - rect.right}px`;
 
-  const adminButtonHtml = _user?.isAdmin ? `
+  const adminButtonHtml = _userProfile?.isAdmin ? `
     <button data-action="admin-panel"
       class="w-full text-left px-4 py-2 hover:bg-amber-50 transition-colors flex items-center gap-2 text-amber-700">
       <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1069,15 +1445,6 @@ function _openAccountMenu(triggerBtn) {
       </svg>
       Billing
     </button>
-    <div class="my-1 border-t border-gray-100"></div>
-    <button data-action="signout"
-      class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
-      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-      </svg>
-      Sign out
-    </button>
     <button data-action="resetpw"
       class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
       <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1088,14 +1455,13 @@ function _openAccountMenu(triggerBtn) {
       Reset password
     </button>
     <div class="my-1 border-t border-gray-100"></div>
-    <button data-action="deleteaccount"
-      class="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 transition-colors flex items-center gap-2">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <button data-action="signout"
+      class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6
-             m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
       </svg>
-      Delete account
+      Sign out
     </button>
   `;
 
@@ -1109,7 +1475,7 @@ function _openAccountMenu(triggerBtn) {
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
 
-  if (_user?.isAdmin) {
+  if (_userProfile?.isAdmin) {
     menu.querySelector('[data-action="admin-panel"]')?.addEventListener('click', () => {
       menu.remove();
       _openAdminPanel();
@@ -1123,7 +1489,7 @@ function _openAccountMenu(triggerBtn) {
 
   menu.querySelector('[data-action="organizations"]').addEventListener('click', () => {
     menu.remove();
-    _openOrganizationsModal();
+    _openOrganizationsPage();
   });
 
   menu.querySelector('[data-action="billing"]').addEventListener('click', () => {
@@ -1145,11 +1511,6 @@ function _openAccountMenu(triggerBtn) {
     } catch (err) {
       _showSimpleModal('Could not send reset email: ' + (err.message || err));
     }
-  });
-
-  menu.querySelector('[data-action="deleteaccount"]').addEventListener('click', () => {
-    menu.remove();
-    _openDeleteAccountModal();
   });
 }
 
@@ -1264,7 +1625,8 @@ function _showSimpleModal(message) {
 
 export async function _openBillingModal() {
   const modalRoot = document.getElementById('modal-root');
-  const plan = await getUserPlan(_user.uid);
+  const billingContext = await getUserBillingContext(_user.uid);
+  const plan = billingContext.personalPlan;
 
   const personalPlans = ['free', 'mid', 'pro'];
   const businessPlans = ['business-small', 'business-growth'];
@@ -1282,7 +1644,9 @@ export async function _openBillingModal() {
           <li>${p.deckLimit} deck limit</li>
           <li>${p.dailyAiRequests} AI requests/day</li>
           <li>${p.allowedProjectTypes === 'all' ? 'All project types' : 'Limited project types'}</li>
-          <li>${p.canUseOrg ? 'Organization support' : 'No organization support'}</li>
+          <li>${p.canUseOrg ? 'Allows organization creation and ownership' : 'No organization creation'}</li>
+          <li>${p.canUseOrg ? `Up to ${p.orgSeatLimit} users per organization` : 'No organization seats'}</li>
+          <li>${p.canUseOrg ? 'Includes org admin member management' : 'No org admin controls'}</li>
         </ul>
         ${isCurrent
           ? '<button class="w-full px-3 py-2 text-xs rounded-lg border border-gray-300 text-gray-500 bg-gray-100" disabled>Current plan</button>'
@@ -1300,6 +1664,14 @@ export async function _openBillingModal() {
         <div class="flex items-center gap-2 mb-4">
           <button id="billing-tab-personal" class="px-3 py-1.5 text-xs rounded-md bg-gray-900 text-white">Personal</button>
           <button id="billing-tab-business" class="px-3 py-1.5 text-xs rounded-md border border-gray-200 text-gray-700">Business</button>
+        </div>
+        <div class="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-xs text-sky-900">
+          <p class="font-semibold mb-1">Organization access model</p>
+          <p>
+            Invited organization members inherit workspace benefits from the org owner's plan
+            ${billingContext.inheritedPlan ? `(currently inheriting ${billingContext.inheritedPlan.label})` : ''},
+            but they cannot create or own a separate organization unless their own personal plan allows it.
+          </p>
         </div>
         <div id="billing-personal-grid" class="grid grid-cols-1 md:grid-cols-3 gap-3">
           ${personalPlans.map(cardHtml).join('')}
@@ -1438,6 +1810,19 @@ async function _openAccountSettingsModal() {
             </div>
           </div>
         </div>
+
+        <div class="space-y-3 pt-4">
+          <h4 class="text-sm font-semibold text-red-700">Danger zone</h4>
+          <div class="rounded-lg border border-red-200 bg-red-50/60 p-4 flex items-center justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium text-red-900">Delete account</p>
+              <p class="text-xs text-red-700 mt-1">Permanently remove your account, decks, cards, and profile data.</p>
+            </div>
+            <button id="acct-delete-account-btn" class="px-3 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors">
+              Delete account
+            </button>
+          </div>
+        </div>
       </div>
     </div>`;
 
@@ -1455,79 +1840,125 @@ async function _openAccountSettingsModal() {
     _updateUserUI({ ..._user, displayName: value });
     _showSimpleModal('Display name updated.');
   });
+
+  document.getElementById('acct-delete-account-btn')?.addEventListener('click', () => {
+    modalRoot.innerHTML = '';
+    _openDeleteAccountModal();
+  });
 }
 
-async function _openOrganizationsModal() {
-  const modalRoot = document.getElementById('modal-root');
+async function _openOrganizationsPage() {
+  _showView('organizations');
+  const root = document.getElementById('organizations-root');
+  if (!root) return;
+
+  root.innerHTML = `
+    <div class="rounded-xl border border-gray-200 bg-white p-6 text-center text-sm text-gray-500">
+      Loading organization...
+    </div>`;
+
   _userProfile = await getUserProfile(_user.uid);
   const org = _userProfile?.organizationId ? await getOrgById(_userProfile.organizationId) : null;
-  const members = org ? await getOrgMembers(org.id) : [];
   const isOwner = Boolean(org && org.ownerId === _user.uid);
+  const isOrgAdmin = Boolean(org && (isOwner || (Array.isArray(org.admins) && org.admins.includes(_user.uid))));
 
-  const memberRows = members.map((m) => {
+  // Admins see all members; regular members only see owner + admins
+  let members = [];
+  try {
+    members = org ? await getOrgMembers(org.id) : [];
+  } catch (err) {
+    console.warn('Could not load org members:', err);
+  }
+
+  // For non-admins, filter to only show owner and admins
+  const visibleMembers = isOrgAdmin
+    ? members
+    : members.filter((m) => m.uid === org?.ownerId || (Array.isArray(org?.admins) && org.admins.includes(m.uid)));
+
+  const memberRows = visibleMembers.map((m) => {
     const label = m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`;
-    const removeBtn = isOwner && m.uid !== _user.uid
+    const rowIsOwner = org && m.uid === org.ownerId;
+    const rowIsAdmin = rowIsOwner || (Array.isArray(org?.admins) && org.admins.includes(m.uid));
+    const roleChip = rowIsOwner
+      ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">Owner</span>'
+      : rowIsAdmin
+        ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">Org Admin</span>'
+        : '<span class="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Member</span>';
+
+    const adminToggleBtn = (isOwner && !rowIsOwner)
+      ? `<button type="button" class="org-toggle-admin-btn text-xs text-sky-700 hover:text-sky-800" data-uid="${m.uid}" data-is-admin="${rowIsAdmin ? '1' : '0'}">${rowIsAdmin ? 'Remove admin' : 'Make admin'}</button>`
+      : '';
+
+    const removeBtn = (isOrgAdmin && !rowIsOwner && m.uid !== _user.uid)
       ? `<button type="button" class="org-remove-btn text-xs text-red-600 hover:text-red-700" data-uid="${m.uid}">Remove</button>`
-      : '<span class="text-[10px] text-gray-400">member</span>';
+      : '';
+
     return `
-      <div class="flex items-center justify-between py-1.5 border-b border-gray-100 last:border-0">
-        <span class="text-sm text-gray-700">${_escHtml(label)}</span>
-        ${removeBtn}
+      <div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0 gap-3">
+        <div class="min-w-0">
+          <p class="text-sm text-gray-800 truncate">${_escHtml(label)}</p>
+        </div>
+        <div class="flex items-center gap-2 flex-shrink-0">
+          ${roleChip}
+          ${adminToggleBtn}
+          ${removeBtn}
+        </div>
       </div>`;
   }).join('');
 
-  modalRoot.innerHTML = `
-    <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[88vh] overflow-y-auto p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-lg font-semibold text-gray-800">Organizations</h3>
-          <button id="org-settings-close" class="text-gray-400 hover:text-gray-600">✕</button>
+  root.innerHTML = org ? `
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
+      <section class="xl:col-span-2 rounded-xl border border-gray-200 bg-white p-5">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h2 class="text-xl font-semibold text-gray-800">${_escHtml(org.name || 'Organization')}</h2>
+            <p class="text-xs text-gray-500">${isOwner ? 'You are the owner' : (isOrgAdmin ? 'You are an org admin' : 'You are a member')}</p>
+          </div>
+          <div class="text-xs text-gray-500">${isOrgAdmin ? `Members: ${members.length}` : ''}</div>
         </div>
-
-        <div class="space-y-3">
-          ${org ? `
-            <div class="rounded-lg border border-gray-200 p-3">
-              <p class="text-sm text-gray-800 font-medium">${_escHtml(org.name || 'Organization')}</p>
-              <p class="text-xs text-gray-500 mt-0.5">${isOwner ? 'You are the owner' : 'You are a member'}</p>
-            </div>
-            <div>
-              <p class="text-xs text-gray-500 mb-1">Members</p>
-              <div class="rounded-lg border border-gray-200 px-3">${memberRows || '<p class="text-sm text-gray-500 py-2">No members yet.</p>'}</div>
-            </div>
-            ${isOwner ? `
-              <form id="org-invite-form" class="flex gap-2">
-                <input id="org-invite-username" type="text" maxlength="20" placeholder="username"
-                  class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-                <button type="submit" class="px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Add user</button>
-              </form>` : ''}
-          ` : `
-            <form id="org-create-form" class="flex gap-2">
-              <input id="org-name-input" type="text" maxlength="80" placeholder="Organization name"
-                class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-              <button type="submit" class="px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Create</button>
-            </form>
-          `}
-          <p id="org-settings-error" class="hidden text-xs text-red-600"></p>
+        <h3 class="text-xs font-medium text-gray-500 mb-1">${isOrgAdmin ? 'All Members' : 'Organization Managers'}</h3>
+        <div class="rounded-lg border border-gray-200 px-3">
+          ${memberRows || '<p class="text-sm text-gray-500 py-2">No members yet.</p>'}
         </div>
-      </div>
-    </div>`;
+      </section>
 
-  const close = () => { modalRoot.innerHTML = ''; };
-  document.getElementById('org-settings-close')?.addEventListener('click', close);
-  modalRoot.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) close();
-  });
+      ${isOrgAdmin ? `
+      <section class="rounded-xl border border-gray-200 bg-white p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-2">Manage Members</h3>
+        <form id="org-invite-form" class="space-y-2">
+          <input id="org-invite-username" type="text" maxlength="20" placeholder="username"
+            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Add user</button>
+        </form>
+        <p class="mt-2 text-xs text-gray-500">Use username only (without @).</p>
+        <p id="org-settings-error" class="hidden mt-2 text-xs text-red-600"></p>
+      </section>
+      ` : ''}
+    </div>
+  ` : `
+    <div class="max-w-xl mx-auto rounded-xl border border-gray-200 bg-white p-6">
+      <h2 class="text-xl font-semibold text-gray-800 mb-1">Create your organization</h2>
+      <p class="text-sm text-gray-500 mb-4">Organizations are available on Mid, Pro, and Business plans.</p>
+      <form id="org-create-form" class="flex gap-2">
+        <input id="org-name-input" type="text" maxlength="80" placeholder="Organization name"
+          class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+        <button type="submit" class="px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Create</button>
+      </form>
+      <p id="org-settings-error" class="hidden mt-2 text-xs text-red-600"></p>
+    </div>
+  `;
 
   const errorEl = document.getElementById('org-settings-error');
+
   document.getElementById('org-create-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('org-name-input')?.value?.trim() || '';
     if (!name) return;
     try {
-      const plan = await getUserPlan(_user.uid);
-      if (!plan.canUseOrg) throw new Error('Organization creation requires Pro or Business tier.');
+      const gate = await canCreateOrganization(_user.uid);
+      if (!gate.allowed) throw new Error(gate.reason || 'Organization creation is not allowed for this account.');
       await createOrg(_user.uid, name);
-      await _openOrganizationsModal();
+      await _openOrganizationsPage();
     } catch (err) {
       errorEl.textContent = err.message || 'Could not create organization.';
       errorEl.classList.remove('hidden');
@@ -1545,18 +1976,31 @@ async function _openOrganizationsModal() {
     }
     try {
       await addMemberByUsername(org.id, username, org.id);
-      await _openOrganizationsModal();
+      await _openOrganizationsPage();
     } catch (err) {
       errorEl.textContent = err.message || 'Could not add member.';
       errorEl.classList.remove('hidden');
     }
   });
 
+  document.querySelectorAll('.org-toggle-admin-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        const makeAdmin = btn.dataset.isAdmin !== '1';
+        await setOrgMemberAdminStatus(org.id, btn.dataset.uid, makeAdmin);
+        await _openOrganizationsPage();
+      } catch (err) {
+        errorEl.textContent = err.message || 'Could not update org admin.';
+        errorEl.classList.remove('hidden');
+      }
+    });
+  });
+
   document.querySelectorAll('.org-remove-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
         await removeMember(org.id, btn.dataset.uid);
-        await _openOrganizationsModal();
+        await _openOrganizationsPage();
       } catch (err) {
         errorEl.textContent = err.message || 'Could not remove member.';
         errorEl.classList.remove('hidden');
@@ -1774,6 +2218,7 @@ document.getElementById('forgot-password-btn')?.addEventListener('click', async 
 const _views = {
   landing: document.getElementById('landing-view'),
   boards:  document.getElementById('boards-view'),
+  organizations: document.getElementById('organizations-view'),
   board:   document.getElementById('board-view'),
   'ai-dashboard': document.getElementById('ai-dashboard-view'),
 };
@@ -1785,11 +2230,13 @@ Object.values(_views).forEach((el) => { if (el) el.style.display = 'none'; });
 const _viewDisplayMap = {
   landing: 'flex',
   boards:  'flex',
+  organizations: 'flex',
   board:   'flex',
   'ai-dashboard': 'flex',
 };
 
 function _showView(name) {
+  _activeViewName = name;
   Object.entries(_views).forEach(([key, el]) => {
     if (!el) return;
     if (key === name) {
@@ -1802,11 +2249,43 @@ function _showView(name) {
     }
   });
 
-  const sidebar = document.getElementById('ai-chat-sidebar');
-  if (sidebar) {
-    sidebar.classList.toggle('ai-chat-dashboard-docked', name === 'ai-dashboard');
-  }
+  _syncAiChatSidebar(name);
+  requestAnimationFrame(() => _syncAiChatSidebar(name));
 }
+
+function _getActiveHeaderHeight(name) {
+  const activeView = _views[name];
+  const header = activeView?.querySelector('header');
+  const measuredHeight = Math.ceil(header?.getBoundingClientRect().height || 0);
+  return Math.max(measuredHeight, 56);
+}
+
+function _syncAiChatSidebar(name) {
+  const sidebar = document.getElementById('ai-chat-sidebar');
+  if (!sidebar) return;
+
+  const shouldShow = name !== 'landing';
+  sidebar.style.display = shouldShow ? 'flex' : 'none';
+  sidebar.classList.toggle('ai-chat-docked', shouldShow);
+
+  if (!shouldShow) {
+    document.documentElement.style.setProperty('--ai-chat-inset', '0px');
+    document.body.classList.remove('ai-chat-open');
+    return;
+  }
+
+  const topOffset = _getActiveHeaderHeight(name);
+  sidebar.style.setProperty('--ai-chat-top', `${topOffset}px`);
+  sidebar.style.top = `${topOffset}px`;
+
+  window.dispatchEvent(new CustomEvent('pmdek:ai-chat-layout-sync'));
+  requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('pmdek:ai-chat-layout-sync')));
+}
+
+window.addEventListener('resize', () => {
+  const activeName = Object.entries(_views).find(([, el]) => el && el.style.display !== 'none')?.[0] || _activeViewName;
+  _syncAiChatSidebar(activeName);
+});
 
 // ─── User UI ──────────────────────────────────────────────────────────────────
 

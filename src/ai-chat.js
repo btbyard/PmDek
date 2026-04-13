@@ -14,13 +14,23 @@ import { createBoard, setBoardId, PROJECT_TYPES, getDefaultColumnsForProjectType
 import { createCard, setCurrentUser, updateCard, getCardsSnapshot } from './cards.js';
 import { getAiUsageSummary, consumeAiCredit } from './billing.js';
 
-const HISTORY_KEY = 'aiChatHistory';
+const HISTORY_KEY_PREFIX = 'aiChatHistory';
+const PIN_KEY_PREFIX = 'aiChatPinned';
+const WIDTH_KEY_PREFIX = 'aiChatWidth';
 const MAX_HISTORY = 100;
+
+function _key(prefix) {
+  return _user?.uid ? `${prefix}_${_user.uid}` : prefix;
+}
 
 let _user           = null;
 let _mode           = 'boards'; // 'boards' | 'board' | 'dashboard'
 let _onBoardCreated = null;     // callback(boardId, boardObj)
 let _submitting     = false;
+let _isResizing     = false;
+let _resizePointerId = null;
+let _resizeRaf = 0;
+let _pendingResizeWidth = null;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -34,6 +44,9 @@ export function initAiChat(user, { onBoardCreated } = {}) {
   _user           = user;
   _onBoardCreated = onBoardCreated;
 
+  _initResize();
+  _applySavedWidth();
+
   document.getElementById('ai-chat-close-btn')
     ?.addEventListener('click', closeAiChat);
 
@@ -46,6 +59,13 @@ export function initAiChat(user, { onBoardCreated } = {}) {
       } else {
         collapseAiChat();
       }
+    });
+
+  document.getElementById('ai-chat-pin-btn')
+    ?.addEventListener('click', () => {
+      const sidebar = document.getElementById('ai-chat-sidebar');
+      if (!sidebar) return;
+      setAiChatPinned(!sidebar.classList.contains('ai-chat-pinned'));
     });
 
   const form = document.getElementById('ai-chat-form');
@@ -62,6 +82,9 @@ export function initAiChat(user, { onBoardCreated } = {}) {
 
   _renderHistory();
   _refreshUsageBadge();
+  setAiChatPinned(_readPinned(), { persist: false, focusInput: false });
+
+  window.addEventListener('pmdek:ai-chat-layout-sync', _syncLayoutInset);
 }
 
 /**
@@ -90,38 +113,45 @@ export function setAiChatMode(mode) {
 export function toggleAiChat() {
   const sidebar = document.getElementById('ai-chat-sidebar');
   if (!sidebar) return;
-  if (sidebar.dataset.open === '1') {
-    closeAiChat();
+  if (sidebar.classList.contains('ai-chat-pinned')) {
+    expandAiChat();
+    return;
+  }
+  if (sidebar.classList.contains('ai-chat-collapsed')) {
+    expandAiChat();
   } else {
-    openAiChat();
+    collapseAiChat();
   }
 }
 
-export function openAiChat() {
+export function openAiChat({ focusInput = true } = {}) {
   const sidebar = document.getElementById('ai-chat-sidebar');
   if (!sidebar) return;
   sidebar.dataset.open = '1';
-  sidebar.classList.remove('translate-x-full');
-  _setButtonsActive(true);
-  // Focus input after animation settles
-  setTimeout(() => document.getElementById('ai-chat-input')?.focus(), 310);
+  if (focusInput && !sidebar.classList.contains('ai-chat-collapsed')) {
+    setTimeout(() => document.getElementById('ai-chat-input')?.focus(), 310);
+  }
   _syncChatHeader();
 }
 
 export function setAiChatExpanded(expanded) {
   const sidebar = document.getElementById('ai-chat-sidebar');
   if (!sidebar) return;
+  if (!expanded && sidebar.classList.contains('ai-chat-pinned')) return;
   sidebar.classList.toggle('ai-chat-expanded', Boolean(expanded));
   if (expanded) sidebar.classList.remove('ai-chat-collapsed');
+  _setButtonsActive(Boolean(expanded));
   _syncChatHeader();
 }
 
 export function collapseAiChat() {
   const sidebar = document.getElementById('ai-chat-sidebar');
   if (!sidebar) return;
-  openAiChat();
+  if (sidebar.classList.contains('ai-chat-pinned')) return;
+  openAiChat({ focusInput: false });
   sidebar.classList.remove('ai-chat-expanded');
   sidebar.classList.add('ai-chat-collapsed');
+  _setButtonsActive(false);
   _syncChatHeader();
 }
 
@@ -130,6 +160,8 @@ export function expandAiChat() {
   if (!sidebar) return;
   openAiChat();
   sidebar.classList.remove('ai-chat-collapsed');
+  sidebar.classList.add('ai-chat-expanded');
+  _setButtonsActive(true);
   _syncChatHeader();
 }
 
@@ -145,27 +177,174 @@ export function openAiChatWithPrompt(prompt, { expand = false } = {}) {
 
 export function closeAiChat() {
   const sidebar = document.getElementById('ai-chat-sidebar');
+  if (sidebar?.classList.contains('ai-chat-pinned')) return;
+  collapseAiChat();
+}
+
+function setAiChatPinned(pinned, { persist = true, focusInput = true } = {}) {
+  const sidebar = document.getElementById('ai-chat-sidebar');
   if (!sidebar) return;
-  delete sidebar.dataset.open;
-  sidebar.classList.add('translate-x-full');
-  sidebar.classList.remove('ai-chat-expanded');
-  sidebar.classList.remove('ai-chat-collapsed');
-  _setButtonsActive(false);
+
+  sidebar.classList.toggle('ai-chat-pinned', Boolean(pinned));
+  if (persist) localStorage.setItem(_key(PIN_KEY_PREFIX), pinned ? '1' : '0');
+
+  if (pinned) {
+    openAiChat({ focusInput });
+    sidebar.classList.remove('ai-chat-collapsed');
+    sidebar.classList.add('ai-chat-expanded');
+    _setButtonsActive(true);
+  } else {
+    sidebar.classList.remove('ai-chat-expanded');
+    sidebar.classList.add('ai-chat-collapsed');
+    _setButtonsActive(false);
+  }
+
   _syncChatHeader();
+}
+
+function _readPinned() {
+  return localStorage.getItem(_key(PIN_KEY_PREFIX)) === '1';
+}
+
+function _initResize() {
+  const handle = document.getElementById('ai-chat-resizer');
+  if (!handle || handle.dataset.bound === '1') return;
+  handle.dataset.bound = '1';
+
+  const onPointerMove = (event) => {
+    if (!_isResizing) return;
+    if (_resizePointerId !== null && event.pointerId !== _resizePointerId) return;
+    _pendingResizeWidth = window.innerWidth - event.clientX;
+    if (_resizeRaf) return;
+    _resizeRaf = window.requestAnimationFrame(() => {
+      _resizeRaf = 0;
+      if (_pendingResizeWidth == null) return;
+      _setSidebarWidth(_pendingResizeWidth, { persist: false });
+    });
+  };
+
+  const stopResize = () => {
+    if (!_isResizing) return;
+    _isResizing = false;
+    _resizePointerId = null;
+    _pendingResizeWidth = null;
+    document.body.classList.remove('ai-chat-resizing');
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', stopResize);
+    window.removeEventListener('pointercancel', stopResize);
+    if (_resizeRaf) {
+      window.cancelAnimationFrame(_resizeRaf);
+      _resizeRaf = 0;
+    }
+
+    const sidebar = document.getElementById('ai-chat-sidebar');
+    sidebar?.classList.remove('ai-chat-resizing');
+    const width = Number(sidebar?.dataset.userWidth || 0);
+    if (Number.isFinite(width) && width > 0) {
+      localStorage.setItem(_key(WIDTH_KEY_PREFIX), String(Math.round(width)));
+    }
+  };
+
+  handle.addEventListener('pointerdown', (event) => {
+    const sidebar = document.getElementById('ai-chat-sidebar');
+    if (!sidebar || window.innerWidth <= 768) return;
+    if (sidebar.classList.contains('ai-chat-collapsed')) return;
+
+    _isResizing = true;
+    _resizePointerId = event.pointerId;
+    document.body.classList.add('ai-chat-resizing');
+    sidebar.classList.add('ai-chat-resizing');
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
+    window.addEventListener('pointerup', stopResize, { passive: true });
+    window.addEventListener('pointercancel', stopResize, { passive: true });
+    event.preventDefault();
+  });
+
+  window.addEventListener('resize', () => {
+    const width = Number(localStorage.getItem(_key(WIDTH_KEY_PREFIX)) || 0);
+    if (Number.isFinite(width) && width > 0) {
+      _setSidebarWidth(width, { persist: false });
+      return;
+    }
+    _syncLayoutInset();
+  });
+}
+
+function _applySavedWidth() {
+  const saved = Number(localStorage.getItem(_key(WIDTH_KEY_PREFIX)) || 0);
+  if (!Number.isFinite(saved) || saved <= 0) return;
+  _setSidebarWidth(saved, { persist: false });
+}
+
+function _setSidebarWidth(width, { persist = true } = {}) {
+  const sidebar = document.getElementById('ai-chat-sidebar');
+  if (!sidebar) return;
+  const clamped = _clampSidebarWidth(width);
+  sidebar.style.setProperty('--ai-chat-width', `${clamped}px`);
+  sidebar.dataset.userWidth = String(clamped);
+  if (persist) localStorage.setItem(_key(WIDTH_KEY_PREFIX), String(clamped));
+  _syncLayoutInset();
+}
+
+function _clampSidebarWidth(width) {
+  const min = 340;
+  const maxByViewport = Math.max(min, window.innerWidth - 96);
+  const max = Math.min(980, maxByViewport);
+  const numeric = Number(width);
+  if (!Number.isFinite(numeric)) return Math.min(736, max);
+  return Math.round(Math.max(min, Math.min(max, numeric)));
 }
 
 function _syncChatHeader() {
   const sidebar = document.getElementById('ai-chat-sidebar');
   const btn = document.getElementById('ai-chat-expand-btn');
+  const pinBtn = document.getElementById('ai-chat-pin-btn');
   const title = document.getElementById('ai-chat-title');
   if (!sidebar || !btn || !title) return;
   const collapsed = sidebar.classList.contains('ai-chat-collapsed');
+  const pinned = sidebar.classList.contains('ai-chat-pinned');
   btn.title = collapsed ? 'Expand AI chat' : 'Collapse AI chat';
   btn.setAttribute('aria-label', collapsed ? 'Expand AI chat' : 'Collapse AI chat');
   btn.innerHTML = collapsed
-    ? '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'
-    : '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>';
+    ? '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>'
+    : '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>';
   title.textContent = collapsed ? 'AI' : 'AI Assistant';
+
+  if (pinBtn) {
+    pinBtn.title = pinned ? 'Unpin AI chat' : 'Pin AI chat open';
+    pinBtn.setAttribute('aria-label', pinned ? 'Unpin AI chat' : 'Pin AI chat open');
+    pinBtn.classList.toggle('bg-amber-200', pinned);
+    pinBtn.classList.toggle('text-amber-900', pinned);
+  }
+
+  _syncLayoutInset();
+}
+
+function _syncLayoutInset() {
+  const sidebar = document.getElementById('ai-chat-sidebar');
+  if (!sidebar) return;
+
+  const nonMobile = window.innerWidth > 640;
+  const visible = sidebar.style.display !== 'none';
+  const expanded = sidebar.classList.contains('ai-chat-expanded');
+  const collapsed = sidebar.classList.contains('ai-chat-collapsed');
+
+  let inset = 0;
+  if (nonMobile && visible) {
+    if (expanded) {
+      // Use the target width, not mid-transition measured width
+      const savedWidth = Number(sidebar.dataset.userWidth || localStorage.getItem(_key(WIDTH_KEY_PREFIX)) || 0);
+      const defaultWidth = Math.min(window.innerWidth * 0.96, 736);
+      const targetWidth = Math.round(savedWidth > 0 ? savedWidth : defaultWidth);
+      inset = targetWidth + 14;
+    } else if (collapsed) {
+      // Collapsed rail: reserve enough space so it doesn't overlap buttons
+      inset = 62; // ~3.35rem rail + small gap
+    }
+  }
+
+  document.documentElement.style.setProperty('--ai-chat-inset', `${inset}px`);
+  document.body.classList.toggle('ai-chat-open', nonMobile && visible && expanded);
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -188,14 +367,14 @@ function _setButtonsActive(active) {
 
 function _loadHistory() {
   try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]');
+    return JSON.parse(localStorage.getItem(_key(HISTORY_KEY_PREFIX)) ?? '[]');
   } catch {
     return [];
   }
 }
 
 function _saveHistory(messages) {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(messages.slice(-MAX_HISTORY)));
+  localStorage.setItem(_key(HISTORY_KEY_PREFIX), JSON.stringify(messages.slice(-MAX_HISTORY)));
 }
 
 function _addToHistory(role, text) {
@@ -553,15 +732,113 @@ async function _doDashboardMode(text) {
   const blocked = openCards.filter((c) => /blocked|risk|hold|waiting/i.test(String(c.columnId || '')));
   const due14 = openCards.filter((c) => c.dueDate && new Date(c.dueDate + 'T00:00:00') <= in14);
   const undated = openCards.filter((c) => !c.dueDate);
-
   const fmt = (arr, max = 6) => arr
     .slice(0, max)
     .map((c) => `- ${c.title || 'Untitled'}${c.dueDate ? ` (${c.dueDate})` : ''}`)
     .join('\n');
 
+  const toDate = (value) => value ? new Date(`${value}T00:00:00`) : null;
+  const daysUntil = (value) => {
+    const due = toDate(value);
+    if (!due) return null;
+    return Math.round((due.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+  };
+  const fmtDate = (value) => {
+    const due = toDate(value);
+    if (!due) return 'No due date';
+    return due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
+  const taskName = (c) => c?.title || 'Untitled task';
+  const taskLabel = (c) => `${taskName(c)}${c?.dueDate ? ` (${c.dueDate})` : ''}`;
+  const normalizeCardTitle = (value) => _normalize(String(value || '').replace(/[^a-z0-9\s]/gi, ' '));
+  const sortByDue = (arr) => [...arr].sort((a, b) => {
+    const aDue = a.dueDate ? new Date(`${a.dueDate}T00:00:00`).getTime() : Number.MAX_SAFE_INTEGER;
+    const bDue = b.dueDate ? new Date(`${b.dueDate}T00:00:00`).getTime() : Number.MAX_SAFE_INTEGER;
+    return aDue - bDue;
+  });
+  const mentionedCards = cards.filter((c) => {
+    const name = normalizeCardTitle(c.title || '');
+    return name && q.includes(name);
+  });
+  const quotedTask = String(text || '').match(/"([^"]+)"/);
+  const specificallyMentioned = quotedTask
+    ? cards.find((c) => normalizeCardTitle(c.title || '') === normalizeCardTitle(quotedTask[1])) || mentionedCards[0] || null
+    : mentionedCards[0] || null;
+  const priorityReason = (task) => {
+    if (!task) return 'Needs review.';
+    if (blocked.includes(task)) return 'It is blocked, so any delay can cascade unless the blocker is resolved quickly.';
+    const delta = daysUntil(task.dueDate);
+    if (delta == null) return 'It has no due date, so it needs scheduling before it can be forecast reliably.';
+    if (delta < 0) return `It is already overdue by ${Math.abs(delta)} day${Math.abs(delta) === 1 ? '' : 's'}, so it carries immediate delivery risk.`;
+    if (delta === 0) return 'It is due today, so it should be treated as immediate work.';
+    if (delta === 1) return 'It is due tomorrow, which makes it the next urgent commitment.';
+    if (delta <= 3) return `It is due in ${delta} days, so it should stay near the top of the queue.`;
+    return `Its due date is still close enough that it should be planned now rather than later.`;
+  };
+  const recommendationExplanation = () => {
+    if (/assign due dates?/.test(q)) {
+      const targets = undated.slice(0, 3);
+      return [
+        'Adding due dates improves forecasting because it turns vague work into scheduled commitments.',
+        '',
+        targets.length
+          ? `Start with these open tasks:\n${targets.map((c, i) => `${i + 1}. ${taskName(c)} — give it an owner and a target date.`).join('\n')}`
+          : 'There are no undated open tasks right now, so this recommendation is already covered.',
+        '',
+        'Next actions:',
+        '1. Set a due date on each task based on effort and dependency order.',
+        '2. Mark any task waiting on someone else as blocked instead of leaving it unscheduled.',
+        '3. Recheck the dashboard after updating dates so the 7-day and 14-day views become accurate.',
+      ].join('\n');
+    }
+
+    if (/clear\s+\d+\s+overdue|overdue task|overdue/.test(q)) {
+      const focus = sortByDue(overdue).slice(0, 3);
+      return [
+        'This recommendation matters because overdue tasks are already past commitment and usually create the most visible schedule risk.',
+        '',
+        focus.length
+          ? `Focus here first:\n${focus.map((c, i) => `${i + 1}. ${taskLabel(c)} — ${priorityReason(c)}`).join('\n')}`
+          : 'You do not currently have overdue tasks, so this recommendation is preventive rather than urgent.',
+        '',
+        'Next actions:',
+        '1. Confirm the owner and whether the task is still realistic to finish as scoped.',
+        '2. Split large work into smaller deliverables and move the first deliverable to the top of the queue.',
+        '3. Update the due date or add a blocker note today so the plan reflects reality.',
+      ].join('\n');
+    }
+
+    return [
+      'This recommendation is trying to reduce delivery risk and make the board easier to forecast.',
+      '',
+      'Next actions:',
+      '1. Identify the specific tasks behind the recommendation.',
+      '2. Assign owners and dates where they are missing.',
+      '3. Re-open the dashboard to confirm the risk count actually drops.',
+    ].join('\n');
+  };
+
   let answer = '';
 
-  if (/overdue|recover|recovery/.test(q)) {
+  if (/help me plan this milestone|plan this milestone|plan this task|milestone/.test(q) && specificallyMentioned) {
+    const target = specificallyMentioned;
+    const delta = daysUntil(target.dueDate);
+    answer = [
+      `Here is a practical plan for ${taskName(target)}${target.dueDate ? `, due ${fmtDate(target.dueDate)}` : ''}.`,
+      '',
+      'Risk checks:',
+      `1. Scope check: confirm what “done” means for ${taskName(target)} so the task does not keep expanding.`,
+      `2. Dependency check: verify whether this task depends on another person, bug fix, approval, or environment setup.`,
+      `3. Schedule check: ${delta == null ? 'set a due date before committing more work to it.' : delta < 0 ? 'it is already late, so re-baseline it immediately.' : delta <= 3 ? 'it is close enough to need daily follow-up.' : 'it still has room, but should be broken into short checkpoints now.'}`,
+      '',
+      'Next 3 actions:',
+      `1. Break ${taskName(target)} into 2-3 concrete subtasks with visible completion points.`,
+      `2. Confirm the owner and clear the first blocker or dependency today.`,
+      `3. Add or update the next checkpoint date so progress is visible before the final due date.`,
+    ].join('\n');
+  } else if (/explain this recommendation|explain this/.test(q)) {
+    answer = recommendationExplanation();
+  } else if (/overdue|recover|recovery/.test(q)) {
     const focus = [...overdue]
       .sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))
       .slice(0, 3);
@@ -580,64 +857,65 @@ async function _doDashboardMode(text) {
     });
 
     answer = [
-      'Dashboard Q&A mode is active (answer-only).',
+      `You have ${overdue.length} overdue task${overdue.length === 1 ? '' : 's'}. Here is the most practical recovery path.`,
       '',
-      `Recommendation explained: overdue tasks are late commitments and should be stabilized before new work.`,
-      '',
-      `Overdue now (${overdue.length}):`,
+      `Overdue now:`,
       overdue.length ? fmt([...overdue].sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))) : '- None overdue right now',
       '',
-      'Exact next actions:',
+      'What to do next:',
       concreteSteps.length ? concreteSteps.join('\n') : '1. No overdue tasks to recover right now.',
       '',
-      'Definition of done for recovery:',
+      'You are back under control when:',
       '- each overdue task has owner, updated due date, and next concrete step.',
       '- no overdue task remains without status update by end of day.',
     ].join('\n');
   } else if (/prioriti|rank|risk|urgency|due date/.test(q)) {
-    const ranked = [...overdue, ...dueSoon]
-      .sort((a, b) => {
-        const aDue = a.dueDate ? new Date(a.dueDate + 'T00:00:00').getTime() : Number.MAX_SAFE_INTEGER;
-        const bDue = b.dueDate ? new Date(b.dueDate + 'T00:00:00').getTime() : Number.MAX_SAFE_INTEGER;
-        return aDue - bDue;
-      });
+    const explicitSet = mentionedCards.length ? mentionedCards : [...overdue, ...dueSoon];
+    const ranked = sortByDue(explicitSet);
     answer = [
-      'Dashboard Q&A mode is active (answer-only).',
+      ranked.length
+        ? 'Here is the priority order, ranked by delivery risk and urgency.'
+        : 'There are no overdue or due-soon tasks to rank right now.',
       '',
-      'Priority order by deadline pressure (overdue first):',
-      ranked.length ? fmt(ranked) : '- No overdue or due-soon tasks found',
-      '',
-      'Reasoning: overdue tasks carry immediate schedule risk; nearest due dates come next.',
+      ranked.length
+        ? ranked.slice(0, 6).map((task, i) => `${i + 1}. ${taskLabel(task)}\n   Why: ${priorityReason(task)}`).join('\n')
+        : '- No overdue or due-soon tasks found',
     ].join('\n');
   } else if (/block|mitigation|unblock/.test(q)) {
     answer = [
-      'Dashboard Q&A mode is active (answer-only).',
+      blocked.length
+        ? 'These are the tasks that need unblock actions first.'
+        : 'There are no tasks currently marked blocked or at risk.',
       '',
-      `Blocked/risk tasks to mitigate (${blocked.length}):`,
+      `Blocked or at-risk tasks:`,
       blocked.length ? fmt(blocked) : '- No blocked tasks currently flagged',
       '',
-      'Mitigation checklist: assign owner, define unblock dependency, set decision deadline, and add fallback path.',
+      'Mitigation checklist:',
+      '1. Assign one owner for the unblock action.',
+      '2. Name the exact dependency or decision that is blocking progress.',
+      '3. Set a deadline for the unblock decision, not just the task due date.',
+      '4. Add a fallback path if the dependency is not resolved in time.',
     ].join('\n');
-  } else if (/sprint|14|two week|plan/.test(q)) {
+  } else if (/sprint|14 day|14-day|two week/.test(q)) {
     answer = [
-      'Dashboard Q&A mode is active (answer-only).',
+      'Here is a practical 14-day execution view based on what is already on the board.',
       '',
-      `14-day execution candidates (${due14.length} due within 14 days):`,
+      `Tasks due within 14 days:`,
       due14.length ? fmt([...due14].sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || '')))) : '- No dated tasks in the next 14 days',
       '',
-      undated.length ? `Also schedule these undated open tasks:\n${fmt(undated, 4)}` : 'No undated open tasks to schedule.',
+      undated.length ? `Also schedule these undated tasks so they stop hiding risk:\n${fmt(undated, 4)}` : 'No undated open tasks to schedule.',
     ].join('\n');
   } else {
     answer = [
-      'Dashboard Q&A mode is active (answer-only).',
+      'Here is the current dashboard summary in plain language.',
       '',
-      `Current snapshot: ${openCards.length} open, ${overdue.length} overdue, ${dueSoon.length} due in 7 days, ${blocked.length} blocked.`,
+      `You have ${openCards.length} open task${openCards.length === 1 ? '' : 's'}, ${overdue.length} overdue, ${dueSoon.length} due in the next 7 days, and ${blocked.length} blocked.`,
       '',
       overdue.length ? `Overdue tasks:\n${fmt(overdue, 5)}` : 'Overdue tasks: none',
-      dueSoon.length ? `\nDue-soon tasks:\n${fmt(dueSoon, 5)}` : '\nDue-soon tasks: none',
+      dueSoon.length ? `\nDue soon:\n${fmt(dueSoon, 5)}` : '\nDue soon: none',
       blocked.length ? `\nBlocked tasks:\n${fmt(blocked, 5)}` : '\nBlocked tasks: none',
       '',
-      `Question asked: "${text}"`,
+      'Ask me things like “rank the due-soon tasks,” “explain this recommendation,” or “help me plan this milestone.”',
     ].join('\n');
   }
 

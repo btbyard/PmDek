@@ -1,8 +1,8 @@
-# PMDek — Monetization Plan
+# PMDecks — Monetization Plan
 
 ## Free Tier (current)
 
-All users get access to core PMDek functionality at no cost:
+All users get access to core PMDecks functionality at no cost:
 
 - Unlimited project decks
 - Unlimited cards, tasks, and subtasks

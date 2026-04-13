@@ -22,6 +22,7 @@ import {
 
 import { db }                          from './firebase.js';
 import { getUserByUsername, getUserProfile } from './users.js';
+import { getPlanConfig }               from './billing.js';
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
@@ -86,11 +87,24 @@ export async function getOrgMembers(orgId) {
  * @returns {Promise<object>}    Resolved user profile
  */
 export async function addMemberByUsername(orgId, username, inviterOrgId) {
+  const org = await getOrgById(orgId);
+  if (!org) throw new Error('Organization not found.');
+
   const user = await getUserByUsername(username);
   if (!user) throw new Error(`No user found with username "@${username}".`);
   if (user.organizationId && user.organizationId !== inviterOrgId) {
     throw new Error(`@${username} is already a member of another organization.`);
   }
+
+  const ownerProfile = org.ownerId ? await getUserProfile(org.ownerId) : null;
+  const ownerPlan = getPlanConfig(ownerProfile?.billingPlan || 'free');
+  const seatLimit = Number(ownerPlan.orgSeatLimit || 0);
+  const currentMembers = Array.isArray(org.members) ? org.members : [];
+
+  if (seatLimit > 0 && currentMembers.length >= seatLimit) {
+    throw new Error(`${ownerPlan.label} allows up to ${seatLimit} users per organization.`);
+  }
+
   await updateDoc(doc(db, 'organizations', orgId), {
     members: arrayUnion(user.uid),
   });
@@ -111,6 +125,7 @@ export async function addMemberByUsername(orgId, username, inviterOrgId) {
 export async function removeMember(orgId, uid) {
   await updateDoc(doc(db, 'organizations', orgId), {
     members: arrayRemove(uid),
+    admins: arrayRemove(uid),
   });
   await updateDoc(doc(db, 'users', uid), {
     organizationId: null,
@@ -128,6 +143,9 @@ export async function removeMember(orgId, uid) {
 export async function setOrgMemberAdminStatus(orgId, uid, isAdmin) {
   const org = await getOrgById(orgId);
   if (!org) throw new Error('Organization not found.');
+  if (!Array.isArray(org.members) || !org.members.includes(uid)) {
+    throw new Error('User must be an organization member before becoming an admin.');
+  }
   
   const admins = Array.isArray(org.admins) ? org.admins : [];
   const updatedAdmins = isAdmin

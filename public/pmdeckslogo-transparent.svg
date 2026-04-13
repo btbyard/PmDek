@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 640" fill="none">
+  <defs>
+    <linearGradient id="cardLight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f3f4f6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Fanned side cards -->
+  <rect x="180" y="80" width="230" height="320" rx="22" transform="rotate(-14 295 240)" fill="url(#cardLight)" opacity="0.95"/>
+  <rect x="490" y="80" width="230" height="320" rx="22" transform="rotate(14 605 240)" fill="url(#cardLight)" opacity="0.95"/>
+
+  <!-- Back stack cards -->
+  <rect x="320" y="350" width="260" height="90" rx="18" transform="rotate(-10 450 395)" fill="#ffffff" opacity="0.78"/>
+  <rect x="320" y="350" width="260" height="90" rx="18" transform="rotate(10 450 395)" fill="#ffffff" opacity="0.78"/>
+
+  <!-- Front card -->
+  <rect x="285" y="55" width="330" height="430" rx="28" fill="url(#cardLight)" stroke="#e5e7eb" stroke-width="4"/>
+
+  <!-- Spade mark -->
+  <path d="M450 128c-21 29-84 78-84 125 0 27 22 49 49 49 14 0 26-6 35-16 9 10 21 16 35 16 27 0 49-22 49-49 0-47-63-96-84-125z" fill="#111827"/>
+  <path d="M450 248v42" stroke="#111827" stroke-width="9" stroke-linecap="round"/>
+  <ellipse cx="433" cy="292" rx="13" ry="9" fill="#111827"/>
+  <ellipse cx="467" cy="292" rx="13" ry="9" fill="#111827"/>
+
+  <!-- PM monogram -->
+  <text x="450" y="390" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="140" font-weight="700" fill="#111827" letter-spacing="-4">PM</text>
+
+  <!-- Brand text -->
+  <text x="450" y="605" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="122" font-weight="800" fill="#ffffff" letter-spacing="-2">PMDecks</text>
+</svg>

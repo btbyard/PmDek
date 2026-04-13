@@ -71,6 +71,7 @@ export const PROJECT_TYPES = [
   { value: 'cybersecurity',  label: 'Cybersecurity' },
   { value: 'data-analyst',   label: 'Data Analyst' },
   { value: 'data-engineering', label: 'Data Engineering' },
+  { value: 'licensing',        label: 'Licensing' },
 ];
 
 const PROJECT_TYPE_COLUMNS = {
@@ -141,6 +142,14 @@ const PROJECT_TYPE_COLUMNS = {
     { id: 'quality-check', title: 'Quality Checks',    order: 2 },
     { id: 'orchestration', title: 'Orchestration',     order: 3 },
     { id: 'published',     title: 'Published',         order: 4 },
+  ],
+  licensing: [
+    { id: 'active',         title: 'Active Licenses',      order: 0 },
+    { id: 'expiring-soon',  title: 'Expiring Soon',        order: 1 },
+    { id: 'renewal-review', title: 'Renewal Review',       order: 2 },
+    { id: 'pending-approval', title: 'Pending Approval',   order: 3 },
+    { id: 'renewed',        title: 'Renewed',              order: 4 },
+    { id: 'expired',        title: 'Expired / Deprecated', order: 5 },
   ],
 };
 
@@ -260,11 +269,17 @@ export async function getCardStatsByUserId(userId) {
  * @param {string|null} [dueDate=null]
  * @returns {Promise<void>}
  */
-export async function renameBoard(boardId, newTitle, dueDate = null) {
-  await updateDoc(doc(db, 'boards', boardId), {
+export async function renameBoard(boardId, newTitle, dueDate = null, { visibility, orgId, assignedMembers } = {}) {
+  const data = {
     title: newTitle.trim() || 'My Board',
     dueDate: dueDate || null,
-  });
+  };
+  if (visibility !== undefined) {
+    data.visibility = visibility;
+    data.orgId = visibility === 'org' ? (orgId || null) : null;
+    data.assignedMembers = visibility === 'org' ? (assignedMembers || []) : [];
+  }
+  await updateDoc(doc(db, 'boards', boardId), data);
 }
 
 /**

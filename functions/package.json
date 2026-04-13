@@ -1,7 +1,7 @@
 {
   "name": "pmdek-functions",
   "version": "0.1.0",
-  "description": "PMDek Firebase Cloud Functions — AI calls only",
+  "description": "PMDecks Firebase Cloud Functions — AI calls only",
   "main": "index.js",
   "engines": {
     "node": "20"

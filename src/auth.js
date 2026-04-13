@@ -1,7 +1,7 @@
 /**
  * @module auth
  * @description
- * Handles Firebase Authentication for PMDek.
+ * Handles Firebase Authentication for PMDecks.
  *
  * Supports:
  *  - Google sign-in (popup)

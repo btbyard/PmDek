@@ -1,5 +1,5 @@
 /**
- * PMDek Cloud Functions
+ * PMDecks Cloud Functions
  *
  * Functions:
  *  - generateCard  : natural language prompt → { title, description }

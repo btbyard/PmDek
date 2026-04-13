@@ -2,7 +2,7 @@
 
 ## Overview
 
-PMDek now has a comprehensive admin system with:
+PMDecks now has a comprehensive admin system with:
 - **Global admins** (`isAdmin` flag on user documents)
 - **Organization admins** (`admins` array on organization documents)
 - **Admin Dashboard** for managing users, orgs, and viewing platform stats
@@ -13,7 +13,7 @@ PMDek now has a comprehensive admin system with:
 
 ### Option A: From Browser Console (Recommended for First Setup)
 
-1. **Sign in** with your account at the PMDek app
+1. **Sign in** with your account at the PMDecks app
 2. **Open the browser console** (F12 → Console tab)
 3. **Run this command**:
    ```javascript
@@ -31,7 +31,7 @@ PMDek now has a comprehensive admin system with:
    - **Field name**: `isAdmin`
    - **Type**: `boolean`
    - **Value**: `true`
-5. Click **Save**, then refresh the PMDek app
+5. Click **Save**, then refresh the PMDecks app
 
 ---
 

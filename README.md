@@ -1,4 +1,4 @@
-# PMDek
+# PMDecks
 
 AI-powered Kanban project management — fast, Firebase-backed, and designed for solo builders and small teams.
 
@@ -36,8 +36,8 @@ AI-powered Kanban project management — fast, Firebase-backed, and designed for
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/your-handle/pmdek.git
-cd pmdek
+git clone https://github.com/your-handle/PMDecks.git
+cd PMDecks
 npm install
 cd functions && npm install && cd ..
 ```
@@ -128,7 +128,7 @@ npm run deploy
 ## Project structure
 
 ```
-pmdek/
+PMDecks/
 ├── src/
 │   ├── main.js        # Entry — wires auth → board lifecycle
 │   ├── firebase.js    # Firebase app init + service exports

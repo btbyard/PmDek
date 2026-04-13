@@ -12,7 +12,7 @@ import { generateBoard, generateBoardWithTasks }            from './ai.js';
 import { createCard, updateAllCardsBackground, setCurrentUser } from './cards.js';
 import { getUserProfile }                                   from './users.js';
 import { getOrgMembers }                                    from './org.js';
-import { getUserPlan, BILLING_PLANS }                       from './billing.js';
+import { getEffectiveUserPlan, BILLING_PLANS }              from './billing.js';
 
 // Store the refresh callback so the rename modal can refresh the grid after saving.
 let _onBoardOpen = null;
@@ -97,7 +97,7 @@ export async function openCreateBoardModal(user, onCreated) {
       style="background:${c.value};border-color:${isDefault ? '#111827' : 'transparent'}${isDefault ? ';outline:2px solid #11182760;outline-offset:2px' : ''}" title="${c.label}"></button>`;
   }).join('');
   const defaultColorVal = DEFAULT_COLOR;
-  const plan = await getUserPlan(user.uid);
+  const plan = await getEffectiveUserPlan(user.uid);
   
   // Helper: determine if a project type is premium
   const freePlanTypes = BILLING_PLANS.free.allowedProjectTypes;
@@ -754,13 +754,16 @@ function _buildCard(board, index = 0, instant = false, stats = null) {
     <div class="board-tile-corner-bottom z-10 flex flex-col items-center gap-px" aria-hidden="true">
       <span class="board-tile-mark" style="color:rgba(255,255,255,0.85)">DEK</span><span style="font-size:0.6rem;color:rgba(255,255,255,0.7);line-height:1;margin-left:2px">&#9824;</span>
     </div>
-    <div class="absolute top-2 right-10 z-20 max-w-[7.5rem] truncate rounded-full border border-white/20 bg-black/30 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white/90 backdrop-blur-sm" title="${escapeHtml(projectTypeLabel)}">
-      ${escapeHtml(projectTypeLabel)}
-    </div>
     <!-- Top suit band -->
-    <div class="board-tile-band h-16 w-full flex-shrink-0 relative overflow-hidden"
+    <div class="board-tile-band h-[4.5rem] w-full flex-shrink-0 relative overflow-hidden flex flex-col"
          ${board.color ? `style="background: linear-gradient(135deg, ${board.color}ee 0%, ${board.color} 60%, ${board.color}99 100%) !important; border-bottom: 1px solid rgba(255,255,255,0.15);"` : ''}>
       <div class="board-tile-sheen"></div>
+      <div class="flex-1"></div>
+      <div class="relative z-10 px-2.5 pb-1.5 w-full text-center">
+        <span class="inline-block max-w-full truncate rounded-full border border-white/20 bg-black/30 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white/90 backdrop-blur-sm" title="${escapeHtml(projectTypeLabel)}">
+          ${escapeHtml(projectTypeLabel)}
+        </span>
+      </div>
     </div>
     <div class="board-tile-body flex-1 flex flex-col justify-between p-3 pb-4">
       <div>
@@ -946,8 +949,22 @@ function _openBoardSettingsMenu(e, board) {
 
 // ─── Rename modal ─────────────────────────────────────────────────────────────
 
-function _openRenameBoardModal(board) {
+async function _openRenameBoardModal(board) {
   const modalRoot = document.getElementById('modal-root');
+
+  // Load org context for visibility selector
+  let orgMembers = [];
+  let userOrgId  = null;
+  try {
+    const profile = await getUserProfile(_currentUser.uid);
+    if (profile?.organizationId) {
+      userOrgId  = profile.organizationId;
+      orgMembers = await getOrgMembers(profile.organizationId);
+    }
+  } catch (_) { /* non-blocking */ }
+
+  const currentVisibility = board.visibility || 'private';
+  const currentAssigned = board.assignedMembers || [];
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -969,6 +986,32 @@ function _openRenameBoardModal(board) {
               value="${board.dueDate || ''}"
               class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
           </div>
+          ${userOrgId ? `
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="edit-board-visibility-input">
+              Visibility
+            </label>
+            <select id="edit-board-visibility-input"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+              <option value="private" ${currentVisibility === 'private' ? 'selected' : ''}>Myself</option>
+              <option value="org" ${currentVisibility === 'org' ? 'selected' : ''}>My Organization</option>
+            </select>
+          </div>
+          <div id="edit-board-member-assign-wrap" class="${currentVisibility === 'org' ? '' : 'hidden'}">
+            <label class="block text-sm font-medium text-gray-700 mb-1">
+              Assign Organization Members
+            </label>
+            <div class="max-h-28 overflow-y-auto rounded-lg border border-gray-200 p-2 space-y-1">
+              ${orgMembers.map((m) => `
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" class="edit-board-member-check rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+                    value="${m.uid}" ${currentAssigned.includes(m.uid) ? 'checked' : ''} />
+                  <span class="text-xs text-gray-700">${m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`}</span>
+                </label>
+              `).join('')}
+            </div>
+          </div>
+          ` : ''}
           <div class="flex justify-end gap-2">
             <button type="button" id="rename-board-cancel"
               class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">
@@ -994,6 +1037,15 @@ function _openRenameBoardModal(board) {
   modalRoot.querySelector('.modal-backdrop').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) close();
   });
+
+  // Wire visibility toggle
+  const editVisSelect = document.getElementById('edit-board-visibility-input');
+  const editMemberWrap = document.getElementById('edit-board-member-assign-wrap');
+  if (editVisSelect && editMemberWrap) {
+    const syncVis = () => editMemberWrap.classList.toggle('hidden', editVisSelect.value !== 'org');
+    editVisSelect.addEventListener('change', syncVis);
+  }
+
   _bindModalSubmitKeys(form);
 
   form.addEventListener('submit', async (e) => {
@@ -1001,9 +1053,19 @@ function _openRenameBoardModal(board) {
     const newTitle = input.value.trim();
     const newDueDate = document.getElementById('rename-board-due-date-input')?.value || null;
     if (!newTitle) return;
+
+    const visibility = document.getElementById('edit-board-visibility-input')?.value || 'private';
+    const assignedMembers = visibility === 'org'
+      ? [...document.querySelectorAll('.edit-board-member-check:checked')].map((el) => el.value)
+      : [];
+
     try {
-      await renameBoard(board.id, newTitle, newDueDate);
-      _upsertCachedBoard({ ...board, title: newTitle, dueDate: newDueDate });
+      await renameBoard(board.id, newTitle, newDueDate, {
+        visibility,
+        orgId: visibility === 'org' ? (userOrgId || null) : null,
+        assignedMembers,
+      });
+      _upsertCachedBoard({ ...board, title: newTitle, dueDate: newDueDate, visibility, orgId: visibility === 'org' ? (userOrgId || null) : null, assignedMembers });
       _persistCurrentBoards();
       close();
       await renderBoardsHome(_currentUser, _onBoardOpen);

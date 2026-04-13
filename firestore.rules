@@ -20,14 +20,58 @@ service cloud.firestore {
     function canUseOrgFeatures() {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.billingPlan in ['pro', 'business-small', 'business-growth'];
+        && (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.billingPlan in ['mid', 'pro', 'business-small', 'business-growth']
+          || request.auth.token.email in ['bradster8@yahoo.com']
+        );
+    }
+
+    function canCreateOwnOrganization() {
+      return canUseOrgFeatures()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId == null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ownedOrgId == null;
+    }
+
+    function orgSeatLimitForPlan(plan) {
+      return plan == 'business-growth' ? 500
+        : plan == 'business-small' ? 50
+        : plan == 'pro' ? 20
+        : plan == 'mid' ? 10
+        : 0;
+    }
+
+    function orgMemberCountAllowed(ownerId, memberCount) {
+      return exists(/databases/$(database)/documents/users/$(ownerId))
+        && memberCount <= orgSeatLimitForPlan(get(/databases/$(database)/documents/users/$(ownerId)).data.billingPlan);
+    }
+
+    function isGlobalAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    function isOrgAdmin(orgId) {
+      return orgId != null
+        && exists(/databases/$(database)/documents/organizations/$(orgId))
+        && request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.admins;
     }
 
     // ── users ──────────────────────────────────────────────────────────────
     match /users/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
+      allow read: if signedIn() && (
+        request.auth.uid == uid
+        || isGlobalAdmin()
+        || (
+          // Allow org members to read profiles of other members in the same org
+          exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId != null
+          && resource.data.organizationId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId
+        )
+      );
       allow write: if signedIn() && (
         request.auth.uid == uid
+        || isGlobalAdmin()
         || (
           request.method == 'update'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['organizationId'])
@@ -55,12 +99,23 @@ service cloud.firestore {
 
     // ── organizations ──────────────────────────────────────────────────────
     match /organizations/{orgId} {
-      allow read: if signedIn() && request.auth.uid in resource.data.members;
+      allow read: if signedIn() && (request.auth.uid in resource.data.members || isGlobalAdmin());
       allow create: if signedIn()
-        && canUseOrgFeatures()
+        && canCreateOwnOrganization()
         && request.resource.data.ownerId == request.auth.uid
+        && orgMemberCountAllowed(request.auth.uid, request.resource.data.members.size())
         && request.auth.uid in request.resource.data.members;
-      allow update, delete: if signedIn() && canUseOrgFeatures() && resource.data.ownerId == request.auth.uid;
+      allow update, delete: if signedIn() && canUseOrgFeatures() && (
+        resource.data.ownerId == request.auth.uid
+        || (
+          isOrgAdmin(orgId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'admins'])
+          && orgMemberCountAllowed(resource.data.ownerId, request.resource.data.members.size())
+          && request.resource.data.ownerId == resource.data.ownerId
+          && request.resource.data.name == resource.data.name
+          && request.resource.data.createdAt == resource.data.createdAt
+        )
+      );
     }
 
     // ── boards ─────────────────────────────────────────────────────────────
@@ -77,9 +132,13 @@ service cloud.firestore {
 
     // ── cards ──────────────────────────────────────────────────────────────
     match /cards/{cardId} {
-      allow read: if signedIn()
-        && exists(/databases/$(database)/documents/boards/$(resource.data.boardId))
-        && canReadBoardData(get(/databases/$(database)/documents/boards/$(resource.data.boardId)).data);
+      allow read: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || (
+          exists(/databases/$(database)/documents/boards/$(resource.data.boardId))
+          && canReadBoardData(get(/databases/$(database)/documents/boards/$(resource.data.boardId)).data)
+        )
+      );
 
       allow create: if signedIn()
         && exists(/databases/$(database)/documents/boards/$(request.resource.data.boardId))

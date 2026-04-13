@@ -57,6 +57,7 @@ export const BILLING_PLANS = {
     dailyAiRequests: 2,
     allowedProjectTypes: ['standard', 'weekly', 'recurring'],
     canUseOrg: false,
+    orgSeatLimit: 0,
     monthlyUsd: 0,
   },
   mid: {
@@ -65,7 +66,8 @@ export const BILLING_PLANS = {
     deckLimit: 25,
     dailyAiRequests: 15,
     allowedProjectTypes: 'all',
-    canUseOrg: false,
+    canUseOrg: true,
+    orgSeatLimit: 10,
     monthlyUsd: 9,
   },
   pro: {
@@ -75,6 +77,7 @@ export const BILLING_PLANS = {
     dailyAiRequests: 40,
     allowedProjectTypes: 'all',
     canUseOrg: true,
+    orgSeatLimit: 20,
     monthlyUsd: 19,
   },
   'business-small': {
@@ -84,7 +87,8 @@ export const BILLING_PLANS = {
     dailyAiRequests: 250,
     allowedProjectTypes: 'all',
     canUseOrg: true,
-    monthlyUsd: 19,
+    orgSeatLimit: 50,
+    monthlyUsd: 29,
   },
   'business-growth': {
     key: 'business-growth',
@@ -93,14 +97,97 @@ export const BILLING_PLANS = {
     dailyAiRequests: 1000,
     allowedProjectTypes: 'all',
     canUseOrg: true,
+    orgSeatLimit: 500,
     monthlyUsd: 49,
   },
 };
 
 const DEFAULT_PLAN_KEY = 'free';
+const PLAN_PRIORITY = {
+  free: 0,
+  mid: 1,
+  pro: 2,
+  'business-small': 3,
+  'business-growth': 4,
+};
+
+function _getPlanPriority(planKey) {
+  return PLAN_PRIORITY[planKey] ?? 0;
+}
+
+function _pickHigherPlan(planA, planB) {
+  if (!planB) return planA;
+  return _getPlanPriority(planB.key) > _getPlanPriority(planA.key) ? planB : planA;
+}
 
 export function getPlanConfig(planKey) {
   return BILLING_PLANS[planKey] || BILLING_PLANS[DEFAULT_PLAN_KEY];
+}
+
+export async function getUserBillingContext(uid) {
+  const overrideKey = _getTestPlanOverrideKey();
+  const userSnap = await getDoc(doc(db, 'users', uid));
+  const userData = userSnap.exists() ? (userSnap.data() || {}) : {};
+  const personalPlan = getPlanConfig(overrideKey || userData.billingPlan || DEFAULT_PLAN_KEY);
+
+  let orgData = null;
+  let orgRole = 'none';
+  let inheritedPlan = null;
+
+  if (userData.organizationId) {
+    const orgSnap = await getDoc(doc(db, 'organizations', userData.organizationId));
+    if (orgSnap.exists()) {
+      orgData = { id: orgSnap.id, ...(orgSnap.data() || {}) };
+      if (orgData.ownerId === uid) orgRole = 'owner';
+      else if (Array.isArray(orgData.admins) && orgData.admins.includes(uid)) orgRole = 'admin';
+      else if (Array.isArray(orgData.members) && orgData.members.includes(uid)) orgRole = 'member';
+
+      if (orgData.ownerId) {
+        const ownerData = orgData.ownerId === uid
+          ? userData
+          : ((await getDoc(doc(db, 'users', orgData.ownerId))).data() || {});
+        const ownerPlan = getPlanConfig(ownerData.billingPlan || DEFAULT_PLAN_KEY);
+        if (ownerPlan.canUseOrg) inheritedPlan = ownerPlan;
+      }
+    }
+  }
+
+  const effectivePlan = _pickHigherPlan(personalPlan, inheritedPlan);
+  const canCreateOrganization = Boolean(personalPlan.canUseOrg && !userData.organizationId && !userData.ownedOrgId);
+
+  return {
+    personalPlan,
+    effectivePlan,
+    inheritedPlan: inheritedPlan && orgData?.ownerId !== uid ? inheritedPlan : null,
+    organizationId: userData.organizationId || null,
+    ownedOrgId: userData.ownedOrgId || null,
+    orgRole,
+    canCreateOrganization,
+    canManageOrgMembers: orgRole === 'owner' || orgRole === 'admin',
+  };
+}
+
+export async function getEffectiveUserPlan(uid) {
+  return (await getUserBillingContext(uid)).effectivePlan;
+}
+
+export async function canCreateOrganization(uid) {
+  const ctx = await getUserBillingContext(uid);
+  let reason = null;
+  if (!ctx.personalPlan.canUseOrg) {
+    reason = 'Organization creation requires your own Pro or Business plan.';
+  } else if (ctx.organizationId) {
+    reason = 'You are already part of an organization. Leave it before creating your own.';
+  } else if (ctx.ownedOrgId) {
+    reason = 'You already own an organization.';
+  }
+
+  return {
+    allowed: ctx.canCreateOrganization,
+    reason,
+    personalPlan: ctx.personalPlan,
+    effectivePlan: ctx.effectivePlan,
+  };
 }
 
 export async function ensureBillingDefaults(uid) {
@@ -128,16 +215,11 @@ export async function ensureBillingDefaults(uid) {
 }
 
 export async function getUserPlan(uid) {
-  const overrideKey = _getTestPlanOverrideKey();
-  if (overrideKey) return getPlanConfig(overrideKey);
-
-  const snap = await getDoc(doc(db, 'users', uid));
-  const key = snap.exists() ? (snap.data().billingPlan || DEFAULT_PLAN_KEY) : DEFAULT_PLAN_KEY;
-  return getPlanConfig(key);
+  return (await getUserBillingContext(uid)).personalPlan;
 }
 
 export async function canCreateDeck(uid) {
-  const plan = await getUserPlan(uid);
+  const plan = await getEffectiveUserPlan(uid);
   const q = query(collection(db, 'boards'), where('userId', '==', uid));
   const snap = await getDocs(q);
   return {
@@ -149,14 +231,14 @@ export async function canCreateDeck(uid) {
 }
 
 export async function assertProjectTypeAllowed(uid, projectType) {
-  const plan = await getUserPlan(uid);
+  const plan = await getEffectiveUserPlan(uid);
   if (plan.allowedProjectTypes === 'all') return plan;
   if (plan.allowedProjectTypes.includes(projectType)) return plan;
   throw new Error(`Project type requires a higher tier. Current plan: ${plan.label}.`);
 }
 
 export async function consumeAiCredit(uid) {
-  const plan = await getUserPlan(uid);
+  const plan = await getEffectiveUserPlan(uid);
   const dayKey = new Date().toISOString().slice(0, 10);
   const usageRef = doc(db, 'users', uid, 'usage', `ai-${dayKey}`);
 
@@ -190,7 +272,7 @@ export async function consumeAiCredit(uid) {
 }
 
 export async function getAiUsageSummary(uid) {
-  const plan = await getUserPlan(uid);
+  const plan = await getEffectiveUserPlan(uid);
   const dayKey = new Date().toISOString().slice(0, 10);
   const usageRef = doc(db, 'users', uid, 'usage', `ai-${dayKey}`);
   let used = 0;
