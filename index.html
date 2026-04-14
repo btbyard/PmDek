@@ -14,7 +14,7 @@
 <body class="h-full flex flex-col">
 
   <!-- ── 1. Landing / Sign-in view ───────────────────────────────────────── -->
-  <div id="landing-view" class="flex-1 min-h-screen relative overflow-hidden bg-[#f7f8fc] flex-col">
+  <div id="landing-view" class="flex-1 min-h-screen relative overflow-auto bg-[#f7f8fc] flex-col">
     <div class="pointer-events-none absolute inset-0">
       <div class="absolute top-20 -right-24 w-[480px] h-[480px] rounded-full" style="background:radial-gradient(circle, rgba(59,130,246,0.18), rgba(59,130,246,0));"></div>
       <div class="absolute bottom-0 left-1/3 w-[620px] h-[320px] rounded-full" style="background:radial-gradient(circle, rgba(15,23,42,0.08), rgba(15,23,42,0));"></div>
@@ -32,15 +32,15 @@
       <section>
         <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide mb-6"
           style="color:#8a5a00;background:#fff3d8;border:1px solid #f3d497;">
-          ✦ AI-powered project management
+          ✦ AI project management workspace
         </div>
 
         <h1 class="text-4xl md:text-5xl xl:text-6xl font-extrabold leading-[1.02] tracking-tight text-slate-900 max-w-2xl">
-          Ship projects,
-          <span class="block" style="color:#b87900;">not paperwork.</span>
+          Create project management decks
+          <span class="block" style="color:#b87900;">in plain English.</span>
         </h1>
         <p class="mt-5 text-lg text-slate-600 max-w-xl leading-relaxed">
-          PMDecks turns plain-English requests into structured boards, tasks, and subtasks so you can plan faster and deliver with confidence.
+          PMDecks helps you create full project boards with tasks, subtasks, owners, and due dates in seconds. Choose the right deck style for your workflow, then let AI Dealer fill it with a practical starter plan.
         </p>
 
         <div class="mt-8 flex flex-wrap gap-3">
@@ -55,20 +55,20 @@
 
         <div class="mt-10 grid sm:grid-cols-2 gap-4 max-w-2xl">
           <div class="rounded-2xl p-5 bg-white/90 border border-slate-200 shadow-sm">
-            <p class="text-sm font-semibold text-slate-900 mb-1">AI Deck Generation</p>
-            <p class="text-sm text-slate-600">Create full PM decks from one sentence with realistic starter tasks.</p>
+            <p class="text-sm font-semibold text-slate-900 mb-1">Create Full Project Decks</p>
+            <p class="text-sm text-slate-600">Generate complete boards from one prompt, then edit cards with drag-and-drop planning.</p>
           </div>
           <div class="rounded-2xl p-5 bg-white/90 border border-slate-200 shadow-sm">
-            <p class="text-sm font-semibold text-slate-900 mb-1">Smart Task Placement</p>
-            <p class="text-sm text-slate-600">Ask for TODO, In Progress, Done, or card-specific subtasks in natural language.</p>
+            <p class="text-sm font-semibold text-slate-900 mb-1">Board Types Built In</p>
+            <p class="text-sm text-slate-600">Standard, Weekly, Recurring, Scrum, Waterfall, Agile, SDLC, Cybersecurity, Data Analyst, Data Engineering, and Licensing.</p>
           </div>
           <div class="rounded-2xl p-5 bg-white/90 border border-slate-200 shadow-sm">
-            <p class="text-sm font-semibold text-slate-900 mb-1">Timeline + Due Dates</p>
-            <p class="text-sm text-slate-600">Track deadlines and completion velocity in one place.</p>
+            <p class="text-sm font-semibold text-slate-900 mb-1">Workflow Stages That Match Your Process</p>
+            <p class="text-sm text-slate-600">From Todo/In Progress/Done to Product Backlog, Sprint Backlog, Review, Testing, Deployment, and more.</p>
           </div>
           <div class="rounded-2xl p-5 bg-white/90 border border-slate-200 shadow-sm">
-            <p class="text-sm font-semibold text-slate-900 mb-1">Subtasks + Attachments</p>
-            <p class="text-sm text-slate-600">Capture details per card without cluttering your board.</p>
+            <p class="text-sm font-semibold text-slate-900 mb-1">Plan, Track, and Recover Faster</p>
+            <p class="text-sm text-slate-600">Use AI Dealer for risk checks, priority ranking, blockers, sprint windows, overdue recovery, and milestone plans.</p>
           </div>
         </div>
       </section>
@@ -144,8 +144,53 @@
       </section>
     </main>
 
+    <section class="relative z-10 max-w-5xl mx-auto w-full px-6 md:px-10 pb-14">
+      <div class="text-center mb-8">
+        <h2 class="text-2xl md:text-3xl font-bold text-slate-900">What AI Dealer Can Do</h2>
+        <p class="mt-2 text-sm text-slate-500 max-w-xl mx-auto">A built-in AI assistant that understands your project and helps you manage it.</p>
+      </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">✨ Generate Full Decks</p>
+          <p class="text-sm text-slate-600">Describe a project in plain English and get a complete board with columns, tasks, and subtasks.</p>
+        </div>
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">📋 Create Cards on the Fly</p>
+          <p class="text-sm text-slate-600">Add individual tasks to any column by telling AI Dealer what needs to be done.</p>
+        </div>
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">⚠️ Risk Assessments</p>
+          <p class="text-sm text-slate-600">Ask for a project risk assessment and get risk levels, categories, and next actions.</p>
+        </div>
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">🔢 Priority Ranking</p>
+          <p class="text-sm text-slate-600">Rank tasks by urgency and risk, with rationale for what to tackle first.</p>
+        </div>
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">🏃 Sprint &amp; 14-Day Plans</p>
+          <p class="text-sm text-slate-600">Generate a two-week sprint plan from your current board state.</p>
+        </div>
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">🚧 Blocker Detection</p>
+          <p class="text-sm text-slate-600">Identify blocked tasks and get a mitigation checklist to unblock your team.</p>
+        </div>
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">🔄 Overdue Recovery</p>
+          <p class="text-sm text-slate-600">Get a recovery sequence with concrete next steps for overdue items.</p>
+        </div>
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">📊 Project Summaries</p>
+          <p class="text-sm text-slate-600">Snapshot metrics, near-term focus areas, and recommended actions in one click.</p>
+        </div>
+        <div class="rounded-2xl p-5 bg-white border border-slate-200 shadow-sm">
+          <p class="text-sm font-semibold text-slate-900 mb-1">🎯 Milestone Planning</p>
+          <p class="text-sm text-slate-600">Plan milestones with risk checks and a 3-step execution plan.</p>
+        </div>
+      </div>
+    </section>
+
     <footer class="relative z-10 text-center pb-8 text-xs text-slate-500">
-      Open source · Powered by Gemini AI
+      Powered by Gemini AI
     </footer>
   </div>
 
@@ -285,6 +330,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
             </svg>
           </button>
+          <span id="board-org-name-display" class="hidden text-xs italic text-gray-400 mt-0.5"></span>
           <span id="board-due-date-display" class="hidden text-xs text-gray-400 mt-0.5"></span>
         </div>
         <button id="deck-next-btn" class="p-1 text-gray-400 hover:text-gray-700 transition-colors disabled:opacity-25" title="Next deck" aria-label="Next deck">
