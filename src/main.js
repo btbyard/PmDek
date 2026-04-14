@@ -178,10 +178,28 @@ async function _openBoard(boardId, board) {
   const titleEl = document.getElementById('board-title-display');
   if (titleEl) titleEl.textContent = boardObj.title;
 
-  // Update due date display
+  // Show org name under the title if this deck belongs to an org
+  const orgNameEl = document.getElementById('board-org-name-display');
+  if (orgNameEl) {
+    if (boardObj.orgId) {
+      getOrgById(boardObj.orgId).then((org) => {
+        if (org?.name) {
+          orgNameEl.textContent = org.name;
+          orgNameEl.classList.remove('hidden');
+        } else {
+          orgNameEl.classList.add('hidden');
+        }
+      });
+    } else {
+      orgNameEl.textContent = '';
+      orgNameEl.classList.add('hidden');
+    }
+  }
+
+  // Update due date display (hide for org boards)
   const dueDateEl = document.getElementById('board-due-date-display');
   if (dueDateEl) {
-    if (boardObj.dueDate) {
+    if (boardObj.dueDate && !boardObj.orgId) {
       const d = new Date(boardObj.dueDate + 'T00:00:00');
       const today = new Date(); today.setHours(0, 0, 0, 0);
       const isOverdue = d < today;
