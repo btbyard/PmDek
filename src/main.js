@@ -55,6 +55,26 @@ let _currentBoardId = null;
 let _boardViewMode = 'kanban';
 let _activeViewName = 'landing';
 let _adminPanelReturnView = 'boards';
+let _infoPageReturnView = 'boards';
+
+const THEME_STORAGE_KEY = 'pmdeck-theme';
+
+function _isDarkMode() {
+  return localStorage.getItem(THEME_STORAGE_KEY) === 'dark';
+}
+
+function _applyTheme(theme) {
+  const isDark = theme === 'dark';
+  document.documentElement.classList.toggle('pm-dark', isDark);
+}
+
+function _toggleTheme() {
+  const next = _isDarkMode() ? 'light' : 'dark';
+  localStorage.setItem(THEME_STORAGE_KEY, next);
+  _applyTheme(next);
+}
+
+_applyTheme(_isDarkMode() ? 'dark' : 'light');
 
 // ─── Auth lifecycle ───────────────────────────────────────────────────────────
 
@@ -98,6 +118,9 @@ async function _restoreFromHash(hash) {
   const h = (hash || '').replace(/^#/, '');
   if (!h || h === 'boards') return;
   if (h === 'organizations') { await _openOrganizationsPage(); return; }
+  if (h === 'help') { _openHelpPage(); return; }
+  if (h === 'support') { _openSupportPage(); return; }
+  if (h === 'privacy') { _openPrivacyPage(); return; }
   const aiMatch = h.match(/^ai-dashboard\/(.+)$/);
   if (aiMatch) { await _openBoard(aiMatch[1]); _openAiDashboardPage(); return; }
   const boardMatch = h.match(/^board\/(.+)$/);
@@ -148,6 +171,31 @@ document.getElementById('back-from-admin-panel-btn')?.addEventListener('click', 
 
 document.getElementById('ai-board-btn')?.addEventListener('click', () => {
   expandAiChat();
+});
+
+document.getElementById('board-activity-log-btn')?.addEventListener('click', () => {
+  _openBoardActivityModal();
+});
+
+document.getElementById('back-from-help-btn')?.addEventListener('click', async () => {
+  if (_infoPageReturnView === 'board') { _showView('board'); return; }
+  if (_infoPageReturnView === 'organizations') { await _openOrganizationsPage(); return; }
+  if (_infoPageReturnView === 'ai-dashboard') { _showView('ai-dashboard'); return; }
+  await _showBoardsHome();
+});
+
+document.getElementById('back-from-support-btn')?.addEventListener('click', async () => {
+  if (_infoPageReturnView === 'board') { _showView('board'); return; }
+  if (_infoPageReturnView === 'organizations') { await _openOrganizationsPage(); return; }
+  if (_infoPageReturnView === 'ai-dashboard') { _showView('ai-dashboard'); return; }
+  await _showBoardsHome();
+});
+
+document.getElementById('back-from-privacy-btn')?.addEventListener('click', async () => {
+  if (_infoPageReturnView === 'board') { _showView('board'); return; }
+  if (_infoPageReturnView === 'organizations') { await _openOrganizationsPage(); return; }
+  if (_infoPageReturnView === 'ai-dashboard') { _showView('ai-dashboard'); return; }
+  await _showBoardsHome();
 });
 
 // ─── Board (Kanban) view ──────────────────────────────────────────────────────
@@ -1514,7 +1562,7 @@ function _openAccountMenu(triggerBtn) {
 
   const rect = triggerBtn.getBoundingClientRect();
   const menu = document.createElement('div');
-  menu.className = 'account-dropdown fixed z-50 bg-white rounded-xl shadow-lg border border-gray-100 py-1 text-sm w-44';
+  menu.className = 'account-dropdown fixed z-50 bg-white rounded-xl shadow-lg border border-gray-100 py-1 text-sm w-56';
   menu.style.top  = `${rect.bottom + 6}px`;
   menu.style.right = `${window.innerWidth - rect.right}px`;
 
@@ -1565,13 +1613,40 @@ function _openAccountMenu(triggerBtn) {
       </svg>
       Reset password
     </button>
-    <button data-action="support-ticket"
+    <button data-action="theme-toggle"
+      class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center justify-between text-gray-700">
+      <span class="flex items-center gap-2">
+        <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 1012 21a9 9 0 008.354-5.646z"/>
+        </svg>
+        Dark mode
+      </span>
+      <span class="text-xs font-medium ${_isDarkMode() ? 'text-emerald-600' : 'text-gray-400'}">${_isDarkMode() ? 'ON' : 'OFF'}</span>
+    </button>
+    <button data-action="help"
+      class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M8.228 9c.549-1.165 1.72-2 3.022-2 1.657 0 3 1.343 3 3 0 1.255-.771 2.33-1.864 2.78-.572.235-1.136.53-1.136 1.22V15m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+      Help
+    </button>
+    <button data-action="support"
       class="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors flex items-center gap-2 text-blue-700">
       <svg class="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M18.364 5.636A9 9 0 115.636 18.364 9 9 0 0118.364 5.636zM12 8v4m0 4h.01"/>
       </svg>
-      Support Ticket
+      Support
+    </button>
+    <button data-action="privacy"
+      class="w-full text-left px-4 py-2 hover:bg-gray-50 transition-colors flex items-center gap-2 text-gray-700">
+      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M12 3l7 4v5c0 5-3.5 8-7 9-3.5-1-7-4-7-9V7l7-4z"/>
+      </svg>
+      Privacy Policy
     </button>
     <div class="my-1 border-t border-gray-100"></div>
     <button data-action="signout"
@@ -1632,9 +1707,179 @@ function _openAccountMenu(triggerBtn) {
     }
   });
 
-  menu.querySelector('[data-action="support-ticket"]').addEventListener('click', () => {
+  menu.querySelector('[data-action="theme-toggle"]').addEventListener('click', () => {
+    _toggleTheme();
     menu.remove();
+  });
+
+  menu.querySelector('[data-action="help"]').addEventListener('click', () => {
+    menu.remove();
+    _openHelpPage();
+  });
+
+  menu.querySelector('[data-action="support"]').addEventListener('click', () => {
+    menu.remove();
+    _openSupportPage();
+  });
+
+  menu.querySelector('[data-action="privacy"]').addEventListener('click', () => {
+    menu.remove();
+    _openPrivacyPage();
+  });
+}
+
+function _openHelpPage() {
+  _infoPageReturnView = _activeViewName;
+  location.hash = 'help';
+  _showView('help');
+}
+
+function _openSupportPage() {
+  _infoPageReturnView = _activeViewName;
+  location.hash = 'support';
+  _showView('support');
+  const btn = document.getElementById('support-ticket-open-btn');
+  if (btn) btn.onclick = () => {
     _openSupportTicketModal();
+  };
+}
+
+function _openPrivacyPage() {
+  _infoPageReturnView = _activeViewName;
+  location.hash = 'privacy';
+  _showView('privacy');
+}
+
+async function _openBoardActivityModal() {
+  if (!_currentBoardId) return;
+
+  const modalRoot = document.getElementById('modal-root');
+  if (!modalRoot) return;
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6 max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-lg font-semibold text-gray-900">Board Activity Log</h3>
+          <button id="activity-log-close" class="text-gray-400 hover:text-gray-700">✕</button>
+        </div>
+        <p class="text-xs text-gray-500 mb-3">Recent completion activity for this board.</p>
+        <div id="activity-log-content" class="rounded-lg border border-gray-200 p-3 text-sm text-gray-500">Loading activity…</div>
+      </div>
+    </div>
+  `;
+
+  const close = () => { modalRoot.innerHTML = ''; };
+  document.getElementById('activity-log-close')?.addEventListener('click', close);
+  modalRoot.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) close();
+  });
+
+  const content = document.getElementById('activity-log-content');
+
+  try {
+    const local = _readLocalCompletionLogs(_currentBoardId).map((row) => ({
+      id: row.id || '',
+      userId: row.userId || '',
+      cardTitle: row.cardTitle || 'Untitled task',
+      type: row.type || 'task',
+      subtaskTitle: row.subtaskTitle || '',
+      whenMs: new Date(row.completedAtIso || 0).getTime(),
+    }));
+
+    const { collection, getDocs, query, where, limit } = await import('firebase/firestore');
+    const remoteSnap = await getDocs(query(
+      collection(db, 'completionLog'),
+      where('boardId', '==', _currentBoardId),
+      limit(150),
+    ));
+
+    const remote = remoteSnap.docs.map((d) => {
+      const data = d.data() || {};
+      const when = data.completedAt?.toDate?.() || data.updatedAt?.toDate?.() || null;
+      return {
+        id: d.id,
+        userId: data.userId || '',
+        cardTitle: data.cardTitle || 'Untitled task',
+        type: data.type || 'task',
+        subtaskTitle: data.subtaskTitle || '',
+        whenMs: when ? when.getTime() : 0,
+      };
+    });
+
+    const dedupe = new Map();
+    [...remote, ...local].forEach((item) => {
+      const key = `${item.id}:${item.userId}:${item.type}:${item.cardTitle}:${item.whenMs}`;
+      if (!dedupe.has(key)) dedupe.set(key, item);
+    });
+
+    const rows = [...dedupe.values()]
+      .sort((a, b) => b.whenMs - a.whenMs)
+      .slice(0, 120);
+
+    if (!rows.length) {
+      content.innerHTML = '<p class="text-sm text-gray-500">No activity yet for this board.</p>';
+      return;
+    }
+
+    // Resolve user labels for activity rows (board members first, then profile lookup fallback)
+    const memberByUid = new Map((getBoardAssignedMembers() || []).map((m) => [m.uid, m]));
+    const uniqueUserIds = [...new Set(rows.map((r) => String(r.userId || '').trim()).filter(Boolean))];
+    const userLabelByUid = new Map();
+
+    await Promise.all(uniqueUserIds.map(async (uid) => {
+      const boardMember = memberByUid.get(uid);
+      if (boardMember) {
+        userLabelByUid.set(uid, boardMember.displayName || (boardMember.username ? `@${boardMember.username}` : uid));
+        return;
+      }
+      if (_user?.uid === uid) {
+        userLabelByUid.set(uid, _userProfile?.displayName || _user?.displayName || _user?.email || 'You');
+        return;
+      }
+      try {
+        const profile = await getUserProfile(uid);
+        if (profile) {
+          userLabelByUid.set(uid, profile.displayName || (profile.username ? `@${profile.username}` : profile.email || uid));
+          return;
+        }
+      } catch (_) {
+        // non-blocking fallback below
+      }
+      userLabelByUid.set(uid, uid);
+    }));
+
+    const rowHtml = rows.map((row) => {
+      const whenLabel = row.whenMs ? new Date(row.whenMs).toLocaleString() : 'Unknown time';
+      const action = row.type === 'subtask'
+        ? `Completed subtask "${_escHtml(row.subtaskTitle || 'Untitled subtask')}"`
+        : 'Completed task';
+      const actorLabel = row.userId ? (userLabelByUid.get(row.userId) || row.userId) : 'Unknown user';
+      return `
+        <li class="py-2 border-b border-gray-100 last:border-b-0">
+          <p class="text-sm text-gray-700"><span class="font-medium">${action}</span> in <span class="font-medium">${_escHtml(row.cardTitle)}</span></p>
+          <p class="text-xs text-gray-500 mt-0.5">by <span class="font-medium text-gray-600">${_escHtml(actorLabel)}</span> • ${_escHtml(whenLabel)}</p>
+        </li>`;
+    }).join('');
+
+    content.innerHTML = `<ul class="divide-y divide-gray-100">${rowHtml}</ul>`;
+  } catch (err) {
+    content.innerHTML = `<p class="text-sm text-red-600">Could not load activity log: ${_escHtml(err?.message || String(err))}</p>`;
+  }
+}
+
+async function _submitSupportTicket({ category, subject, message }) {
+  const { collection, addDoc, serverTimestamp } = await import('firebase/firestore');
+  const { db: firebaseDb } = await import('./firebase.js');
+  await addDoc(collection(firebaseDb, 'supportTickets'), {
+    uid:         _user.uid,
+    email:       _user.email || '',
+    displayName: _userProfile?.displayName || _user.displayName || '',
+    category,
+    subject,
+    message,
+    status:      'open',
+    createdAt:   serverTimestamp(),
   });
 }
 
@@ -1710,18 +1955,7 @@ function _openSupportTicketModal() {
     errorEl.classList.add('hidden');
 
     try {
-      const { collection, addDoc, serverTimestamp } = await import('firebase/firestore');
-      const { db } = await import('./firebase.js');
-      await addDoc(collection(db, 'supportTickets'), {
-        uid:         _user.uid,
-        email:       _user.email || '',
-        displayName: _userProfile?.displayName || _user.displayName || '',
-        category,
-        subject,
-        message,
-        status:      'open',
-        createdAt:   serverTimestamp(),
-      });
+      await _submitSupportTicket({ category, subject, message });
       close();
       _showSimpleModal('✅ Your support ticket has been submitted. We will get back to you soon.');
     } catch (err) {
@@ -2134,6 +2368,12 @@ async function _openAccountSettingsModal() {
       const fileRef = storageRef(storage, path);
       await uploadBytes(fileRef, file, { contentType: file.type });
       const url = await getDownloadURL(fileRef);
+
+      // Check if user is still logged in (token may have been invalidated e.g. after password reset)
+      if (!_user) {
+        setPhotoStatus('Session expired. Please sign in again.', 'error');
+        return;
+      }
 
       await updateUserPhotoURL(_user.uid, url);
       if (firebaseAuth.currentUser) {
@@ -2898,6 +3138,9 @@ const _views = {
   board:   document.getElementById('board-view'),
   'admin-panel': document.getElementById('admin-panel-view'),
   'ai-dashboard': document.getElementById('ai-dashboard-view'),
+  help: document.getElementById('help-view'),
+  support: document.getElementById('support-view'),
+  privacy: document.getElementById('privacy-view'),
 };
 
 // Hide all views immediately — auth state callback will reveal the correct one.
@@ -2911,6 +3154,9 @@ const _viewDisplayMap = {
   board:   'flex',
   'admin-panel': 'flex',
   'ai-dashboard': 'flex',
+  help: 'flex',
+  support: 'flex',
+  privacy: 'flex',
 };
 
 function _showView(name) {
@@ -2942,7 +3188,7 @@ function _syncAiChatSidebar(name) {
   const sidebar = document.getElementById('ai-chat-sidebar');
   if (!sidebar) return;
 
-  const shouldShow = name !== 'landing';
+  const shouldShow = ['boards', 'board', 'organizations', 'admin-panel', 'ai-dashboard'].includes(name);
   sidebar.style.display = shouldShow ? 'flex' : 'none';
   sidebar.classList.toggle('ai-chat-docked', shouldShow);
 

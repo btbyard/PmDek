@@ -28,6 +28,7 @@ import {
   limit,
   documentId,
   getDocs,
+  getDoc,
   serverTimestamp,
 } from 'firebase/firestore';
 
@@ -491,7 +492,21 @@ export async function createColumnBlock(title = 'New Card') {
   await saveColumns(boardId, nextColumns);
 
   const boardTitle = document.getElementById('board-title-display')?.textContent?.trim() || 'Deck';
-  renderBoard({ id: boardId, title: boardTitle, columns: nextColumns });
+  
+  // Fetch the full board document to preserve stickyNotes and other properties
+  let boardToRender = { id: boardId, title: boardTitle, columns: nextColumns };
+  try {
+    const boardSnap = await getDoc(doc(db, 'boards', boardId));
+    if (boardSnap.exists()) {
+      const fullBoard = { id: boardSnap.id, ...boardSnap.data() };
+      // Preserve columns from local changes, but keep other properties like stickyNotes
+      boardToRender = { ...fullBoard, columns: nextColumns };
+    }
+  } catch (err) {
+    console.warn('Could not fetch full board doc, using partial board object:', err);
+  }
+  
+  renderBoard(boardToRender);
   reRenderCards();
 }
 
@@ -1054,7 +1069,21 @@ function buildColumnEl(col, boardId, allColumns) {
       const next = allColumns.filter((c) => c.id !== col.id);
       try {
         await saveColumns(boardId, next);
-        renderBoard({ id: boardId, title: document.getElementById('board-title-display')?.textContent?.trim() || '', columns: next });
+        
+        // Fetch the full board document to preserve stickyNotes and other properties
+        let boardToRender = { id: boardId, title: document.getElementById('board-title-display')?.textContent?.trim() || '', columns: next };
+        try {
+          const boardSnap = await getDoc(doc(db, 'boards', boardId));
+          if (boardSnap.exists()) {
+            const fullBoard = { id: boardSnap.id, ...boardSnap.data() };
+            // Preserve columns from local changes, but keep other properties like stickyNotes
+            boardToRender = { ...fullBoard, columns: next };
+          }
+        } catch (err) {
+          console.warn('Could not fetch full board doc, using partial board object:', err);
+        }
+        
+        renderBoard(boardToRender);
         reRenderCards();
       } catch (err) {
         console.error('Delete column failed:', err);

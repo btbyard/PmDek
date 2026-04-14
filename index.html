@@ -299,6 +299,9 @@
         <button id="project-timeline-btn"
           class="px-2.5 py-1 text-xs font-medium border border-gray-200 text-gray-600 rounded-md hover:bg-gray-50"
           title="Project Timeline/Gantt">Timeline/Gantt</button>
+        <button id="board-activity-log-btn"
+          class="px-2.5 py-1 text-xs font-medium border border-gray-200 text-gray-600 rounded-md hover:bg-gray-50"
+          title="Board activity log">Activity Log</button>
         <button id="reset-col-widths-btn"
           class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500
                  hover:text-gray-800 border border-gray-200 hover:border-gray-300
@@ -477,6 +480,329 @@
     </header>
     <main class="flex-1 overflow-auto p-6 bg-[#f7f8fc]">
       <div id="ai-dashboard-root" class="max-w-6xl mx-auto"></div>
+    </main>
+  </div>
+
+  <!-- ── 7. Help view ─────────────────────────────────────────────────────── -->
+  <div id="help-view" class="hidden flex-col h-full">
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button id="back-from-help-btn"
+          class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Back
+        </button>
+        <h2 class="text-lg font-semibold text-gray-800">Help</h2>
+      </div>
+      <div class="flex items-center gap-2">
+        <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
+        <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
+      </div>
+    </header>
+    <main class="flex-1 overflow-auto p-6 bg-[#f7f8fc]">
+      <div class="max-w-6xl mx-auto grid lg:grid-cols-[260px_minmax(0,1fr)] gap-4 items-start">
+        <aside class="rounded-xl border border-gray-200 bg-white p-4 lg:sticky lg:top-6">
+          <h3 class="text-sm font-semibold text-gray-800 mb-3">Help Contents</h3>
+          <nav class="flex flex-col gap-1 text-sm">
+            <a href="#help-overview" class="px-2 py-1.5 rounded text-gray-600 hover:text-brand-700 hover:bg-gray-50">Overview</a>
+            <a href="#help-modes" class="px-2 py-1.5 rounded text-gray-600 hover:text-brand-700 hover:bg-gray-50">Modes and Views</a>
+            <a href="#help-features" class="px-2 py-1.5 rounded text-gray-600 hover:text-brand-700 hover:bg-gray-50">Core Features</a>
+            <a href="#help-ai" class="px-2 py-1.5 rounded text-gray-600 hover:text-brand-700 hover:bg-gray-50">AI in PMDecks</a>
+            <a href="#help-ai-flow" class="px-2 py-1.5 rounded text-gray-600 hover:text-brand-700 hover:bg-gray-50">How AI Works</a>
+            <a href="#help-quickstart" class="px-2 py-1.5 rounded text-gray-600 hover:text-brand-700 hover:bg-gray-50">Quick Start</a>
+          </nav>
+        </aside>
+
+        <div class="space-y-4">
+          <section id="help-overview" class="scroll-mt-24 rounded-xl border border-gray-200 bg-white p-6">
+            <h3 class="text-xl font-semibold text-gray-800 mb-2">PMDecks Help Center</h3>
+            <p class="text-sm text-gray-600">Use this page as your product guide for modes, features, and AI behavior.</p>
+          </section>
+
+          <section id="help-modes" class="scroll-mt-24 rounded-xl border border-gray-200 bg-white p-6">
+            <h4 class="text-base font-semibold text-gray-800 mb-3">Modes and Views</h4>
+            <div class="grid md:grid-cols-2 gap-3 text-sm text-gray-600">
+              <div class="rounded-lg border border-gray-200 p-3">
+                <p class="font-medium text-gray-800">Boards Home</p>
+                <p>Manage all decks, switch tabs (My Decks, Organization Decks, Archived), and create new decks.</p>
+              </div>
+              <div class="rounded-lg border border-gray-200 p-3">
+                <p class="font-medium text-gray-800">Board Mode</p>
+                <p>Work on one deck with full card editing, assignees, comments, sticky notes, and filtering.</p>
+              </div>
+              <div class="rounded-lg border border-gray-200 p-3">
+                <p class="font-medium text-gray-800">Kanban / List / Calendar / Timeline</p>
+                <p>Switch board perspective depending on your workflow: drag board, table list, due-date calendar, or Gantt timeline.</p>
+              </div>
+              <div class="rounded-lg border border-gray-200 p-3">
+                <p class="font-medium text-gray-800">AI Dashboard</p>
+                <p>Open-project analysis mode for recommendations, risk summaries, and workload visibility.</p>
+              </div>
+            </div>
+          </section>
+
+          <section id="help-features" class="scroll-mt-24 rounded-xl border border-gray-200 bg-white p-6">
+            <h4 class="text-base font-semibold text-gray-800 mb-3">Core Features</h4>
+            <div class="grid md:grid-cols-2 gap-4 text-sm text-gray-600">
+              <div>
+                <p class="font-medium text-gray-800 mb-1">Task and Card Management</p>
+                <ul class="list-disc pl-5 space-y-1">
+                  <li>Create, edit, clone, and delete cards</li>
+                  <li>Subtasks, recurring tasks, start and due dates</li>
+                  <li>File attachments and comments</li>
+                  <li>Assignees for cards and subtasks</li>
+                </ul>
+              </div>
+              <div>
+                <p class="font-medium text-gray-800 mb-1">Planning and Tracking</p>
+                <ul class="list-disc pl-5 space-y-1">
+                  <li>Realtime updates with drag-and-drop order</li>
+                  <li>Sticky notes lane for board-level notes</li>
+                  <li>Board activity log with actor and timestamp</li>
+                  <li>Search and filter chips (overdue, due today, recurring, my tasks)</li>
+                </ul>
+              </div>
+              <div>
+                <p class="font-medium text-gray-800 mb-1">Collaboration</p>
+                <ul class="list-disc pl-5 space-y-1">
+                  <li>Organizations and role-based member management</li>
+                  <li>Org deck visibility and member assignment</li>
+                  <li>User profiles with photo and display name</li>
+                </ul>
+              </div>
+              <div>
+                <p class="font-medium text-gray-800 mb-1">Account and Admin</p>
+                <ul class="list-disc pl-5 space-y-1">
+                  <li>Billing plans and feature entitlements</li>
+                  <li>Password reset, account settings, dark mode</li>
+                  <li>Admin panel for users, organizations, and support tickets</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section id="help-ai" class="scroll-mt-24 rounded-xl border border-gray-200 bg-white p-6">
+            <h4 class="text-base font-semibold text-gray-800 mb-3">AI in PMDecks: What It Does</h4>
+            <div class="grid md:grid-cols-2 gap-4 text-sm text-gray-600">
+              <div class="rounded-lg border border-gray-200 p-4">
+                <p class="font-medium text-gray-800 mb-1">AI Dealer (Create tab)</p>
+                <ul class="list-disc pl-5 space-y-1">
+                  <li>Generates full decks from natural language project prompts</li>
+                  <li>Generates single tasks/cards in board mode</li>
+                  <li>Can target columns from intent in your prompt</li>
+                </ul>
+              </div>
+              <div class="rounded-lg border border-gray-200 p-4">
+                <p class="font-medium text-gray-800 mb-1">Open Project (Project tab)</p>
+                <ul class="list-disc pl-5 space-y-1">
+                  <li>Explains risk, priority, workload, and planning options</li>
+                  <li>Supports intent prompts for milestone planning and triage</li>
+                  <li>Helps reason about due-soon and blocked tasks</li>
+                </ul>
+              </div>
+            </div>
+
+            <p class="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">Current limitation: automatic assignee assignment during AI task generation in board mode is not enabled yet.</p>
+          </section>
+
+          <section id="help-ai-flow" class="scroll-mt-24 rounded-xl border border-gray-200 bg-white p-6">
+            <h4 class="text-base font-semibold text-gray-800 mb-3">How AI Works (Technical Flow)</h4>
+            <div class="rounded-lg border border-gray-200 p-4 text-sm text-gray-600">
+              <ol class="list-decimal pl-5 space-y-1">
+                <li>You submit a prompt from AI chat or deck creation.</li>
+                <li>The client calls secured backend functions.</li>
+                <li>The backend sends a structured request to Gemini and validates the output format.</li>
+                <li>PMDecks applies the returned result to boards/cards in Firestore.</li>
+                <li>Realtime listeners update your UI instantly.</li>
+              </ol>
+              <p class="mt-3 text-xs text-gray-500">Note: AI request limits depend on your billing plan.</p>
+            </div>
+          </section>
+
+          <section id="help-quickstart" class="scroll-mt-24 rounded-xl border border-gray-200 bg-white p-6">
+            <h4 class="text-base font-semibold text-gray-800 mb-3">Quick Start</h4>
+            <ol class="list-decimal pl-5 space-y-1 text-sm text-gray-600">
+              <li>Create a deck manually or with AI Dealer.</li>
+              <li>Add tasks, due dates, and assignees.</li>
+              <li>Use List/Calendar/Timeline views for planning.</li>
+              <li>Open AI Dashboard for project-level recommendations.</li>
+              <li>Use Support page for tickets and assistance.</li>
+            </ol>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ── 8. Support view ──────────────────────────────────────────────────── -->
+  <div id="support-view" class="hidden flex-col h-full">
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button id="back-from-support-btn"
+          class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Back
+        </button>
+        <h2 class="text-lg font-semibold text-gray-800">Support</h2>
+      </div>
+      <div class="flex items-center gap-2">
+        <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
+        <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
+      </div>
+    </header>
+    <main class="flex-1 overflow-auto p-6 bg-[#f7f8fc]">
+      <div class="max-w-4xl mx-auto space-y-4">
+        <section class="rounded-xl border border-gray-200 bg-white p-6">
+          <h3 class="text-lg font-semibold text-gray-800 mb-2">Need help?</h3>
+          <p class="text-sm text-gray-600 mb-4">Check quick answers below or open a support ticket and we will follow up by email.</p>
+          <button id="support-ticket-open-btn"
+            class="gold-btn px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors">
+            Open Support Ticket
+          </button>
+        </section>
+
+        <section class="rounded-xl border border-gray-200 bg-white p-6">
+          <h4 class="text-base font-semibold text-gray-800 mb-3">Quick Answers</h4>
+          <div class="space-y-3 text-sm text-gray-600">
+            <div>
+              <p class="font-medium text-gray-800">How do I add members to my organization?</p>
+              <p>Open Organizations from the account menu, then use Add Existing Account User or email invite.</p>
+            </div>
+            <div>
+              <p class="font-medium text-gray-800">Why am I seeing AI request limits?</p>
+              <p>Free tier includes a daily AI allowance. Upgrade in Billing for higher limits.</p>
+            </div>
+            <div>
+              <p class="font-medium text-gray-800">Where can I see board progress?</p>
+              <p>Use AI Dashboard and Timeline/Gantt for progress, due dates, and workload insights.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- ── 9. Privacy Policy view ───────────────────────────────────────────── -->
+  <div id="privacy-view" class="hidden flex-col h-full">
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <button id="back-from-privacy-btn"
+          class="flex items-center gap-1.5 text-sm text-gray-500 hover:text-brand-600 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Back
+        </button>
+        <h2 class="text-lg font-semibold text-gray-800">Privacy Policy</h2>
+      </div>
+      <div class="flex items-center gap-2">
+        <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
+        <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
+      </div>
+    </header>
+    <main class="flex-1 overflow-auto p-6 bg-[#f7f8fc]">
+      <div class="max-w-4xl mx-auto rounded-xl border border-gray-200 bg-white p-6 space-y-5 text-sm text-gray-600">
+        <p class="text-xs text-gray-500">Last updated: April 14, 2026</p>
+        <p>This Privacy Policy explains how PMDecks ("PMDecks," "we," "our," or "us") collects, uses, discloses, and protects personal information when you use our services, website, and applications.</p>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">1. Scope and Controller</h3>
+          <p>This policy applies to all PMDecks users and visitors. PMDecks is the data controller for personal data processed under this policy unless otherwise stated.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">2. Information We Collect</h3>
+          <ul class="list-disc pl-5 space-y-1">
+            <li><strong>Account data:</strong> name, email address, profile photo, authentication identifiers, username.</li>
+            <li><strong>Workspace data:</strong> boards, cards, comments, attachments, notes, assignment data, activity logs, and organization membership.</li>
+            <li><strong>Billing data:</strong> subscription tier, payment/customer references, and billing status (payment processing handled by Stripe).</li>
+            <li><strong>Support data:</strong> support tickets, support messages, and related metadata.</li>
+            <li><strong>Technical data:</strong> IP-derived diagnostics, device/browser information, usage events, and security logs.</li>
+            <li><strong>AI input/output:</strong> prompts, structured outputs, and related generation metadata used for AI features.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">3. How We Use Information</h3>
+          <ul class="list-disc pl-5 space-y-1">
+            <li>Provide, operate, maintain, and secure PMDecks features.</li>
+            <li>Authenticate users and manage account access.</li>
+            <li>Enable collaboration features and organization workflows.</li>
+            <li>Process subscriptions, enforce plans, and prevent fraud or abuse.</li>
+            <li>Respond to support requests and service communications.</li>
+            <li>Provide AI-assisted functionality and improve product performance.</li>
+            <li>Comply with applicable legal obligations and lawful requests.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">4. Legal Bases for Processing (GDPR/UK GDPR)</h3>
+          <ul class="list-disc pl-5 space-y-1">
+            <li><strong>Contract:</strong> to provide the services you request.</li>
+            <li><strong>Legitimate interests:</strong> service reliability, security, analytics, and abuse prevention.</li>
+            <li><strong>Consent:</strong> where required (for example, optional communications or certain cookies).</li>
+            <li><strong>Legal obligation:</strong> to comply with law, tax, and regulatory duties.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">5. AI Processing and Safeguards</h3>
+          <p>AI features route requests through secured backend services. API keys are not exposed in the browser client. AI providers may process prompt content to generate outputs. Do not submit highly sensitive personal data to AI prompts unless you have a lawful basis and authorization to do so.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">6. Sharing and Disclosure</h3>
+          <p>We do not sell personal information. We may share data with trusted processors and service providers (for example, hosting, authentication, storage, billing, and support tooling) under contractual safeguards. We may also disclose data when required by law or to protect rights, safety, and platform integrity.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">7. International Transfers</h3>
+          <p>Your data may be processed in countries other than your own. Where required, we use lawful transfer mechanisms such as standard contractual clauses or equivalent safeguards.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">8. Data Retention</h3>
+          <p>We retain data for as long as needed to provide services, comply with legal obligations, resolve disputes, and enforce agreements. You can request account deletion; certain records may be retained when legally required.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">9. Security</h3>
+          <p>We use technical and organizational safeguards, including authentication controls, access restrictions, encrypted transport, and service-provider security tooling. No system can be guaranteed 100% secure.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">10. Your Privacy Rights</h3>
+          <p>Depending on your jurisdiction, you may have rights to access, correct, delete, restrict, object, or port your personal data, and to withdraw consent where applicable.</p>
+          <ul class="list-disc pl-5 space-y-1 mt-2">
+            <li><strong>California (CCPA/CPRA):</strong> rights to know, delete, correct, and limit use of sensitive personal information, plus non-discrimination rights.</li>
+            <li><strong>EEA/UK:</strong> rights under GDPR/UK GDPR and the right to lodge a complaint with a supervisory authority.</li>
+          </ul>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">11. Cookies and Similar Technologies</h3>
+          <p>We use local storage and similar technologies for authentication state, preferences, and feature functionality. Where non-essential technologies are used, we will provide notice and choices as required by law.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">12. Children’s Privacy</h3>
+          <p>PMDecks is not directed to children under 13 (or higher age where required by local law). If we learn we collected personal data from a child without proper authorization, we will delete it.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">13. Changes to This Policy</h3>
+          <p>We may update this policy from time to time. Material updates will be posted with a revised "Last updated" date.</p>
+        </section>
+
+        <section>
+          <h3 class="text-base font-semibold text-gray-800 mb-1">14. Contact</h3>
+          <p>For privacy questions or rights requests, contact us at <a href="mailto:sturgeonbaysoftware@gmail.com" class="text-brand-600 hover:underline">sturgeonbaysoftware@gmail.com</a>.</p>
+        </section>
+      </div>
     </main>
   </div>
 

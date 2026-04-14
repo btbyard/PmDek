@@ -763,6 +763,232 @@ body.ai-chat-resizing {
   }
 }
 
+/* ── Dark mode theme ─────────────────────────────────────────────────────── */
+html.pm-dark {
+  color-scheme: dark;
+}
+
+html.pm-dark,
+html.pm-dark body {
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+html.pm-dark #landing-view,
+html.pm-dark #boards-view main,
+html.pm-dark #board-view main,
+html.pm-dark #organizations-view main,
+html.pm-dark #admin-panel-view main,
+html.pm-dark #ai-dashboard-view main,
+html.pm-dark #help-view main,
+html.pm-dark #support-view main,
+html.pm-dark #privacy-view main {
+  background: #0f172a !important;
+}
+
+html.pm-dark header,
+html.pm-dark .bg-white,
+html.pm-dark .account-dropdown,
+html.pm-dark .deck-picker-dropdown,
+html.pm-dark .modal-backdrop > div {
+  background: #111827 !important;
+  border-color: #334155 !important;
+}
+
+html.pm-dark .text-gray-900,
+html.pm-dark .text-gray-800,
+html.pm-dark .text-slate-900,
+html.pm-dark .text-black {
+  color: #f8fafc !important;
+}
+
+html.pm-dark .text-gray-700,
+html.pm-dark .text-gray-600,
+html.pm-dark .text-gray-500,
+html.pm-dark .text-slate-600,
+html.pm-dark .text-slate-500 {
+  color: #cbd5e1 !important;
+}
+
+html.pm-dark .border-gray-200,
+html.pm-dark .border-gray-100,
+html.pm-dark .border-slate-200,
+html.pm-dark .border-slate-300 {
+  border-color: #334155 !important;
+}
+
+html.pm-dark input,
+html.pm-dark textarea,
+html.pm-dark select {
+  background: #0b1220 !important;
+  color: #e2e8f0 !important;
+  border-color: #334155 !important;
+}
+
+html.pm-dark .hover\:bg-gray-50:hover,
+html.pm-dark .hover\:bg-gray-100:hover,
+html.pm-dark .hover\:bg-slate-50:hover {
+  background: #1f2937 !important;
+}
+
+/* AI Chat dark-mode readability */
+html.pm-dark #ai-chat-sidebar {
+  background: #0f172a !important;
+  border-left-color: #334155 !important;
+}
+
+html.pm-dark #ai-chat-sidebar.ai-chat-collapsed {
+  background: linear-gradient(180deg, #172033 0%, #111827 100%) !important;
+  border-left-color: #475569 !important;
+}
+
+html.pm-dark #ai-chat-header {
+  background: #1f2937 !important;
+  border-bottom-color: #334155 !important;
+}
+
+html.pm-dark #ai-chat-tabs {
+  background: #111827 !important;
+  border-bottom-color: #334155 !important;
+}
+
+html.pm-dark #ai-chat-tab-project {
+  color: #cbd5e1 !important;
+  border-color: #475569 !important;
+  background: transparent !important;
+}
+
+html.pm-dark #ai-chat-tab-project:hover {
+  background: #1f2937 !important;
+}
+
+html.pm-dark #ai-chat-messages {
+  background: #0b1220 !important;
+}
+
+html.pm-dark #ai-chat-messages > .justify-start > div,
+html.pm-dark #ai-thinking > div {
+  background: #1e293b !important;
+  border-color: #475569 !important;
+  color: #e2e8f0 !important;
+}
+
+html.pm-dark #ai-chat-messages > .justify-end > div {
+  background: #7c5100 !important;
+  border-color: #a16207 !important;
+  color: #fef3c7 !important;
+}
+
+html.pm-dark #ai-chat-empty p {
+  color: #cbd5e1 !important;
+}
+
+html.pm-dark #ai-chat-sidebar .border-t.border-gray-200.p-3.bg-white.flex-shrink-0 {
+  background: #111827 !important;
+  border-top-color: #334155 !important;
+}
+
+html.pm-dark #ai-chat-input {
+  background: #0b1220 !important;
+  border-color: #475569 !important;
+  color: #e2e8f0 !important;
+}
+
+html.pm-dark #ai-chat-input::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Sticky notes in dark mode: preserve paper-note text readability */
+html.pm-dark .sticky-stack-card textarea,
+html.pm-dark .sticky-stack-card textarea:focus {
+  background-color: transparent !important;
+  color: #3b1a08 !important;
+  -webkit-text-fill-color: #3b1a08 !important;
+  caret-color: #000 !important;
+  border-color: transparent !important;
+}
+
+/* Board view mode buttons (selected + inactive) */
+html.pm-dark #board-header-views button {
+  background: #111827 !important;
+  color: #cbd5e1 !important;
+  border-color: #475569 !important;
+}
+
+html.pm-dark #board-header-views button.bg-gray-900,
+html.pm-dark #board-header-views button.text-white {
+  background: #f59e0b !important;
+  color: #111827 !important;
+  border-color: #f59e0b !important;
+}
+
+/* List view container + header readability */
+html.pm-dark #board-list-view .bg-white,
+html.pm-dark #board-list-view table,
+html.pm-dark #board-list-view tbody tr {
+  background: #0f172a !important;
+}
+
+html.pm-dark #board-list-view thead,
+html.pm-dark #board-list-view thead tr,
+html.pm-dark #board-list-view thead th {
+  background: #1e293b !important;
+  color: #e2e8f0 !important;
+  border-color: #475569 !important;
+}
+
+html.pm-dark #board-list-view td,
+html.pm-dark #board-list-view tr,
+html.pm-dark #board-list-view .border-gray-100,
+html.pm-dark #board-list-view .border-gray-200 {
+  border-color: #334155 !important;
+}
+
+/* Calendar cards should not stay white in dark mode */
+html.pm-dark #board-calendar-view .bg-white {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+}
+
+html.pm-dark #board-calendar-view .bg-sky-50 {
+  background: #13253d !important;
+  border-color: #3b82f6 !important;
+}
+
+html.pm-dark #board-calendar-view .text-sky-900,
+html.pm-dark #board-calendar-view .text-gray-500,
+html.pm-dark #board-calendar-view .text-gray-600 {
+  color: #dbeafe !important;
+}
+
+html.pm-dark #board-calendar-view .bg-sky-200 {
+  background: #1e3a5f !important;
+}
+
+html.pm-dark #board-calendar-view .bg-sky-500 {
+  background: #60a5fa !important;
+}
+
+/* Task checkboxes in dark mode */
+html.pm-dark input[type='checkbox'] {
+  accent-color: #f59e0b;
+}
+
+html.pm-dark .task-check,
+html.pm-dark .subtask-check,
+html.pm-dark .list-task-check,
+html.pm-dark .list-subtask-check {
+  background: #0b1220 !important;
+  border-color: #64748b !important;
+}
+
+html.pm-dark .task-check:checked,
+html.pm-dark .subtask-check:checked,
+html.pm-dark .list-task-check:checked,
+html.pm-dark .list-subtask-check:checked {
+  border-color: #f59e0b !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .board-tile-shell,
   .board-tile-shell-ready,
