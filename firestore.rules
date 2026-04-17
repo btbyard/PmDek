@@ -53,7 +53,8 @@ service cloud.firestore {
     }
 
     function orgSeatLimitForPlan(plan) {
-      return plan == 'business-growth' ? 500
+      return plan == 'enterprise' ? 5000
+        : plan == 'business-growth' ? 500
         : plan == 'business-small' ? 50
         : plan == 'pro' ? 20
         : plan == 'mid' ? 10
@@ -126,9 +127,7 @@ service cloud.firestore {
     match /organizations/{orgId} {
       allow read: if signedIn() && (request.auth.uid in resource.data.members || isGlobalAdmin());
       allow create: if signedIn()
-        && canCreateOwnOrganization()
         && request.resource.data.ownerId == request.auth.uid
-        && orgMemberCountAllowed(request.auth.uid, request.resource.data.members.size())
         && request.auth.uid in request.resource.data.members;
       allow update, delete: if signedIn() && canUseOrgFeatures() && (
         resource.data.ownerId == request.auth.uid

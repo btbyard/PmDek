@@ -57,24 +57,33 @@ export async function createOrg(uid, name) {
     throw new Error(`Your ${userPlan.label} plan allows up to ${orgLimit} organization${orgLimit === 1 ? '' : 's'}. You have reached the limit.`);
   }
   
-  const orgRef = await addDoc(collection(db, 'organizations'), {
-    name:      name.trim(),
-    ownerId:   uid,
-    members:   [uid],
-    admins:    [uid],
-    memberRoles: {
-      [uid]: 'owner',
-    },
-    allowAiUsage: true,
-    createdAt: serverTimestamp(),
-  });
+  let orgRef;
+  try {
+    orgRef = await addDoc(collection(db, 'organizations'), {
+      name:      name.trim(),
+      ownerId:   uid,
+      members:   [uid],
+      admins:    [uid],
+      memberRoles: {
+        [uid]: 'owner',
+      },
+      allowAiUsage: true,
+      createdAt: serverTimestamp(),
+    });
+  } catch (err) {
+    throw new Error(`Organization document create failed: ${err?.message || 'permission denied'}`);
+  }
   
   // Update user doc with new org in ownedOrgIds array
   ownedOrgIds.push(orgRef.id);
-  await updateDoc(doc(db, 'users', uid), {
-    ownedOrgIds: ownedOrgIds,
-    organizationId: orgRef.id,
-  });
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      ownedOrgIds: ownedOrgIds,
+      organizationId: orgRef.id,
+    });
+  } catch (err) {
+    throw new Error(`User profile update after org create failed: ${err?.message || 'permission denied'}`);
+  }
   
   return orgRef.id;
 }

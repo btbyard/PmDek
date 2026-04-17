@@ -1619,13 +1619,25 @@ document.querySelectorAll('.sign-out-btn').forEach((btn) => {
 // ─── Account dropdown ─────────────────────────────────────────────────────────
 
 function _openAccountMenu(triggerBtn) {
-  document.querySelectorAll('.account-dropdown').forEach((m) => m.remove());
+  const existing = document.querySelector('.account-dropdown');
+  const clickedId = triggerBtn?.id || '';
+
+  if (existing) {
+    const sameTrigger = existing.dataset.triggerId === clickedId;
+    existing.remove();
+    document.querySelectorAll('#account-menu-btn-boards, #account-menu-btn-board').forEach((btn) => {
+      btn.setAttribute('aria-expanded', 'false');
+    });
+    if (sameTrigger) return;
+  }
 
   const rect = triggerBtn.getBoundingClientRect();
   const menu = document.createElement('div');
   menu.className = 'account-dropdown fixed z-50 bg-white rounded-xl shadow-lg border border-gray-100 py-1 text-sm w-56';
+  menu.dataset.triggerId = clickedId;
   menu.style.top  = `${rect.bottom + 6}px`;
   menu.style.right = `${window.innerWidth - rect.right}px`;
+  triggerBtn.setAttribute('aria-expanded', 'true');
 
   const adminButtonHtml = _isGlobalAdminClient() ? `
     <button data-action="admin-panel"
@@ -1723,42 +1735,48 @@ function _openAccountMenu(triggerBtn) {
   document.body.appendChild(menu);
 
   const close = (ev) => {
-    if (!menu.contains(ev.target)) {
-      menu.remove();
-      document.removeEventListener('click', close, true);
-    }
+    if (menu.contains(ev.target) || triggerBtn.contains(ev.target)) return;
+    menu.remove();
+    triggerBtn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', close, true);
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
 
+  const closeMenu = () => {
+    menu.remove();
+    triggerBtn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', close, true);
+  };
+
   if (_isGlobalAdminClient()) {
     menu.querySelector('[data-action="admin-panel"]')?.addEventListener('click', () => {
-      menu.remove();
+      closeMenu();
       _openAdminPanel(_activeViewName);
     });
   }
 
   menu.querySelector('[data-action="account-settings"]').addEventListener('click', () => {
-    menu.remove();
+    closeMenu();
     _openAccountSettingsModal();
   });
 
   menu.querySelector('[data-action="organizations"]').addEventListener('click', () => {
-    menu.remove();
+    closeMenu();
     _openOrganizationsPage();
   });
 
   menu.querySelector('[data-action="billing"]').addEventListener('click', () => {
-    menu.remove();
+    closeMenu();
     _openBillingModal();
   });
 
   menu.querySelector('[data-action="signout"]').addEventListener('click', () => {
-    menu.remove();
+    closeMenu();
     signOutUser();
   });
 
   menu.querySelector('[data-action="resetpw"]').addEventListener('click', async () => {
-    menu.remove();
+    closeMenu();
     if (!_user?.email) return;
     try {
       await resetPassword(_user.email);
@@ -1770,21 +1788,21 @@ function _openAccountMenu(triggerBtn) {
 
   menu.querySelector('[data-action="theme-toggle"]').addEventListener('click', () => {
     _toggleTheme();
-    menu.remove();
+    closeMenu();
   });
 
   menu.querySelector('[data-action="help"]').addEventListener('click', () => {
-    menu.remove();
+    closeMenu();
     _openHelpPage();
   });
 
   menu.querySelector('[data-action="support"]').addEventListener('click', () => {
-    menu.remove();
+    closeMenu();
     _openSupportPage();
   });
 
   menu.querySelector('[data-action="privacy"]').addEventListener('click', () => {
-    menu.remove();
+    closeMenu();
     _openPrivacyPage();
   });
 }
@@ -2030,7 +2048,10 @@ function _openSupportTicketModal() {
 }
 
 ['account-menu-btn-boards', 'account-menu-btn-board'].forEach((id) => {
-  document.getElementById(id)?.addEventListener('click', (e) => _openAccountMenu(e.currentTarget));
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.setAttribute('aria-expanded', 'false');
+  btn.addEventListener('click', (e) => _openAccountMenu(e.currentTarget));
 });
 
 function _openDeleteAccountModal() {

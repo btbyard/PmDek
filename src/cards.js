@@ -655,7 +655,7 @@ function buildCardEl(card, isDoneColumn = false) {
         />` : ''}
         <p class="card-title text-sm font-medium leading-snug ${isCompleted ? 'line-through text-white/60' : 'text-white'}">${isDoneColumn ? '<svg class="inline-block w-3.5 h-3.5 mr-1 text-emerald-400 -mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' : ''}${escapeHtml(card.title)}${subtasks.length ? `<span class="ml-1.5 text-[10px] font-normal text-white/40 align-middle">${subtasks.filter(t => t.completed).length}/${subtasks.length}</span>` : ''}</p>
       </label>
-      <div class="card-actions flex-shrink-0 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div class="card-actions flex-shrink-0 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity relative">
         <button class="add-subtask-btn text-white/45 hover:text-brand-100 p-0.5 rounded" data-card-id="${card.id}" title="Add sub task">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -677,6 +677,42 @@ function buildCardEl(card, isDoneColumn = false) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
         </button>
+      </div>
+      <!-- Mobile dropdown toggle and menu (positioned in top right) -->
+      <div class="card-mobile-actions md:hidden">
+        <button class="card-actions-mobile-toggle text-white/60 hover:text-brand-100 p-1 rounded" data-card-id="${card.id}" title="Actions">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+          </svg>
+        </button>
+        <!-- Mobile dropdown menu -->
+        <div class="card-actions-mobile-menu hidden absolute top-full right-0 mt-1 bg-gray-900 border border-white/20 rounded-lg shadow-xl z-50 w-36 py-1">
+          <button class="add-subtask-btn-mobile w-full text-left px-3 py-2 text-xs text-white/80 hover:bg-white/10 flex items-center gap-2" data-card-id="${card.id}">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            Add subtask
+          </button>
+          <button class="edit-card-btn-mobile w-full text-left px-3 py-2 text-xs text-white/80 hover:bg-white/10 flex items-center gap-2" data-card-id="${card.id}">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 0l.172.172a2 2 0 010 2.828L12 16H9v-3z"/>
+            </svg>
+            Edit
+          </button>
+          <button class="clone-card-btn-mobile w-full text-left px-3 py-2 text-xs text-white/80 hover:bg-white/10 flex items-center gap-2" data-card-id="${card.id}">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+            Clone
+          </button>
+          <div class="border-t border-white/10 my-1"></div>
+          <button class="delete-card-btn-mobile w-full text-left px-3 py-2 text-xs text-red-400 hover:bg-red-500/20 flex items-center gap-2" data-card-id="${card.id}">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+            Delete
+          </button>
+        </div>
       </div>
     </div>
     ${card.description ? `<p class="card-desc mt-1 text-xs text-white/60 line-clamp-2">${escapeHtml(card.description)}</p>` : ''}
@@ -781,8 +817,11 @@ export function initCardEvents(user) {
 
   const board = document.getElementById('board-root');
 
-  // Close any open column color popups when clicking outside them
+  // Close any open mobile action menus when clicking outside them
   document.addEventListener('click', (e) => {
+    if (!e.target.closest('.card-actions-mobile-menu') && !e.target.closest('.card-actions-mobile-toggle')) {
+      document.querySelectorAll('.card-actions-mobile-menu').forEach((m) => m.classList.add('hidden'));
+    }
     if (!e.target.closest('.col-quick-color-wrap') && !e.target.closest('.col-quick-bg-wrap')) {
       document.querySelectorAll('.col-quick-color-popup').forEach((p) => p.classList.add('hidden'));
       document.querySelectorAll('.col-quick-bg-popup').forEach((p) => p.classList.add('hidden'));
@@ -974,6 +1013,80 @@ export function initCardEvents(user) {
     if (cloneBtn) {
       const cardEl = cloneBtn.closest('.card');
       await _cloneCard(cloneBtn.dataset.cardId, cardEl);
+      return;
+    }
+
+    // ── Mobile actions dropdown toggle ───────────────────────────────────
+    const mobileToggle = e.target.closest('.card-actions-mobile-toggle');
+    if (mobileToggle) {
+      const cardEl = mobileToggle.closest('.card');
+      const menu = cardEl?.querySelector('.card-actions-mobile-menu');
+      if (menu) {
+        menu.classList.toggle('hidden');
+        e.stopPropagation();
+      }
+      return;
+    }
+
+    // ── Mobile add subtask ───────────────────────────────────────────────
+    const addSubtaskBtnMobile = e.target.closest('.add-subtask-btn-mobile');
+    if (addSubtaskBtnMobile) {
+      const cardEl = addSubtaskBtnMobile.closest('.card');
+      cardEl?.querySelector('.card-actions-mobile-menu')?.classList.add('hidden');
+      _openAddSubtaskModal(addSubtaskBtnMobile.dataset.cardId, cardEl);
+      return;
+    }
+
+    // ── Mobile edit card ─────────────────────────────────────────────────
+    const editBtnMobile = e.target.closest('.edit-card-btn-mobile');
+    if (editBtnMobile) {
+      const cardEl = editBtnMobile.closest('.card');
+      cardEl?.querySelector('.card-actions-mobile-menu')?.classList.add('hidden');
+      let checkable = false;
+      let subtasks = [];
+      let attachments = [];
+      let recurring = false;
+      let recurrenceFrequency = 'weekly';
+      try { checkable = JSON.parse(cardEl.dataset.checkable ?? 'false'); } catch (_) {}
+      subtasks = _readSubtasksFromCardEl(cardEl);
+      try { attachments = JSON.parse(cardEl.dataset.attachments || '[]'); } catch (_) {}
+      try { recurring = JSON.parse(cardEl.dataset.recurring ?? 'false'); } catch (_) {}
+      recurrenceFrequency = cardEl.dataset.recurrenceFrequency || 'weekly';
+      const fullCard = _lastCards.find((c) => c.id === editBtnMobile.dataset.cardId) || {};
+      openCardModal({
+        cardId:      editBtnMobile.dataset.cardId,
+        title:       cardEl.querySelector('.card-title').textContent.replace(/\s*\d+\/\d+$/, '').trim(),
+        description: cardEl.querySelector('.card-desc')?.textContent || '',
+        checkable,
+        subtasks,
+        startDate:   fullCard.startDate || null,
+        dueDate:     cardEl.dataset.dueDate || null,
+        recurring,
+        recurrenceFrequency,
+        attachments,
+        comments:    Array.isArray(fullCard.comments) ? fullCard.comments : [],
+        assignees:   Array.isArray(fullCard.assignees) ? fullCard.assignees : [],
+      });
+      return;
+    }
+
+    // ── Mobile clone card ────────────────────────────────────────────────
+    const cloneBtnMobile = e.target.closest('.clone-card-btn-mobile');
+    if (cloneBtnMobile) {
+      const cardEl = cloneBtnMobile.closest('.card');
+      cardEl?.querySelector('.card-actions-mobile-menu')?.classList.add('hidden');
+      await _cloneCard(cloneBtnMobile.dataset.cardId, cardEl);
+      return;
+    }
+
+    // ── Mobile delete card ───────────────────────────────────────────────
+    const delBtnMobile = e.target.closest('.delete-card-btn-mobile');
+    if (delBtnMobile) {
+      const cardId    = delBtnMobile.dataset.cardId;
+      const cardEl    = delBtnMobile.closest('.card');
+      cardEl?.querySelector('.card-actions-mobile-menu')?.classList.add('hidden');
+      const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.trim() || 'this card';
+      _openDeleteCardModal(cardId, cardTitle);
       return;
     }
 

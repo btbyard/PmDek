@@ -1068,9 +1068,20 @@ body.ai-mobile-chat-open {
 
   .move-card-prev-btn,
   .move-card-next-btn {
-    width: 15px;
-    height: 15px;
-    bottom: 4px;
+    width: 14px !important;
+    height: 14px !important;
+    min-width: 14px;
+    min-height: 14px;
+    bottom: 3px;
+    border-radius: 3px;
+    padding: 0;
+    line-height: 1;
+  }
+
+  .move-card-prev-btn svg,
+  .move-card-next-btn svg {
+    width: 9px !important;
+    height: 9px !important;
   }
 
   #boards-view main > .max-w-5xl {
@@ -1137,6 +1148,52 @@ body.ai-mobile-chat-open {
   
   .card {
     font-size: 0.875rem !important;
+  }
+
+  .card > div:first-child {
+    position: relative;
+    align-items: flex-start;
+  }
+
+  .card > div:first-child > label {
+    padding-right: 0;
+    flex: 1;
+  }
+
+  /* Hide desktop action buttons on mobile */
+  .card .card-actions {
+    display: none !important;
+  }
+
+  /* Mobile chevron button in top-right of card */
+  .card .card-mobile-actions {
+    position: absolute !important;
+    top: 0.15rem;
+    right: 0.35rem;
+    z-index: 5;
+  }
+
+  .card .card-mobile-actions .card-actions-mobile-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    min-width: 1.25rem;
+    min-height: 1.25rem;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 0.25rem;
+    padding: 0 !important;
+  }
+
+  .card .card-mobile-actions .card-actions-mobile-toggle svg {
+    width: 0.75rem !important;
+    height: 0.75rem !important;
+  }
+
+  .card > div:first-child > label {
+    padding-right: 1.5rem;
   }
   
   /* Reduce column header size on mobile */
