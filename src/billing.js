@@ -67,6 +67,7 @@ export const BILLING_PLANS = {
     dailyAiRequests: 15,
     allowedProjectTypes: 'all',
     canUseOrg: true,
+    orgLimitCount: 1,
     orgSeatLimit: 10,
     monthlyUsd: 9,
   },
@@ -77,6 +78,7 @@ export const BILLING_PLANS = {
     dailyAiRequests: 40,
     allowedProjectTypes: 'all',
     canUseOrg: true,
+    orgLimitCount: 2,
     orgSeatLimit: 20,
     monthlyUsd: 19,
   },
@@ -87,6 +89,7 @@ export const BILLING_PLANS = {
     dailyAiRequests: 250,
     allowedProjectTypes: 'all',
     canUseOrg: true,
+    orgLimitCount: 1,
     orgSeatLimit: 50,
     monthlyUsd: 29,
   },
@@ -97,8 +100,21 @@ export const BILLING_PLANS = {
     dailyAiRequests: 1000,
     allowedProjectTypes: 'all',
     canUseOrg: true,
+    orgLimitCount: 1,
     orgSeatLimit: 500,
     monthlyUsd: 49,
+  },
+  'enterprise': {
+    key: 'enterprise',
+    label: 'Custom/Enterprise',
+    deckLimit: 10000,
+    dailyAiRequests: 5000,
+    allowedProjectTypes: 'all',
+    canUseOrg: true,
+    orgLimitCount: 999,
+    orgSeatLimit: 5000,
+    monthlyUsd: 0,
+    customPricing: true,
   },
 };
 
@@ -109,6 +125,7 @@ const PLAN_PRIORITY = {
   pro: 2,
   'business-small': 3,
   'business-growth': 4,
+  'enterprise': 5,
 };
 
 function _getPlanPriority(planKey) {
@@ -153,16 +170,15 @@ export async function getUserBillingContext(uid) {
   }
 
   const effectivePlan = _pickHigherPlan(personalPlan, inheritedPlan);
-  const canCreateOrganization = Boolean(personalPlan.canUseOrg && !userData.organizationId && !userData.ownedOrgId);
 
   return {
     personalPlan,
     effectivePlan,
     inheritedPlan: inheritedPlan && orgData?.ownerId !== uid ? inheritedPlan : null,
     organizationId: userData.organizationId || null,
-    ownedOrgId: userData.ownedOrgId || null,
+    ownedOrgIds: Array.isArray(userData.ownedOrgIds) ? userData.ownedOrgIds : (userData.ownedOrgId ? [userData.ownedOrgId] : []),
     orgRole,
-    canCreateOrganization,
+    canCreateOrganization: Boolean(personalPlan.canUseOrg),
     canManageOrgMembers: orgRole === 'owner' || orgRole === 'admin',
   };
 }
@@ -174,17 +190,24 @@ export async function getEffectiveUserPlan(uid) {
 export async function canCreateOrganization(uid) {
   const ctx = await getUserBillingContext(uid);
   let reason = null;
+  const orgLimit = ctx.personalPlan.orgLimitCount || 0;
+  const ownedCount = Array.isArray(ctx.ownedOrgIds) ? ctx.ownedOrgIds.length : 0;
+  
   if (!ctx.personalPlan.canUseOrg) {
     reason = 'Organization creation requires your own Pro or Business plan.';
-  } else if (ctx.organizationId) {
-    reason = 'You are already part of an organization. Leave it before creating your own.';
-  } else if (ctx.ownedOrgId) {
-    reason = 'You already own an organization.';
+  } else if (ctx.organizationId && !(Array.isArray(ctx.ownedOrgIds) && ctx.ownedOrgIds.includes(ctx.organizationId))) {
+    reason = 'You are already part of another organization. Leave it before creating your own.';
+  } else if (ownedCount >= orgLimit && orgLimit > 0) {
+    reason = `Your ${ctx.personalPlan.label} plan allows up to ${orgLimit} organization${orgLimit === 1 ? '' : 's'}. You have reached the limit.`;
   }
 
   return {
-    allowed: ctx.canCreateOrganization,
+    allowed: !reason && ctx.personalPlan.canUseOrg && ownedCount < orgLimit,
     reason,
+    orgLimit,
+    ownedCount,
+    organizationId: ctx.organizationId || null,
+    ownedOrgIds: Array.isArray(ctx.ownedOrgIds) ? ctx.ownedOrgIds : [],
     personalPlan: ctx.personalPlan,
     effectivePlan: ctx.effectivePlan,
   };

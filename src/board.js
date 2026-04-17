@@ -694,9 +694,76 @@ export function renderBoard(board) {
 
   const stickyLane = _buildStickyNotesLane(board);
   boardLayout.appendChild(stickyLane);
+  
+  // Mobile sticky notes drawer
+  const mobileNotesContainer = document.createElement('div');
+  mobileNotesContainer.className = 'lg:hidden fixed bottom-0 left-0 right-0 z-30 transition-all duration-300';
+  mobileNotesContainer.id = 'mobile-notes-drawer';
+  
+  const mobileNotesToggle = document.createElement('button');
+  mobileNotesToggle.className = 'w-full bg-amber-400 hover:bg-amber-500 text-amber-900 font-semibold py-3 px-4 text-sm flex items-center justify-between';
+  mobileNotesToggle.id = 'mobile-notes-toggle';
+  mobileNotesToggle.innerHTML = `
+    <span class="flex items-center gap-2">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
+      </svg>
+      Notes
+    </span>
+    <svg class="w-4 h-4 transition-transform" id="notes-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7-7m0 0l-7 7"/>
+    </svg>
+  `;
+  
+  const mobileNotesContent = document.createElement('div');
+  mobileNotesContent.className = 'hidden bg-amber-50/95 border-t-2 border-amber-200 max-h-96 overflow-y-auto';
+  mobileNotesContent.id = 'mobile-notes-content';
+  
+  // Move the desktop notes content to mobile notes content on small screens
+  const cloneStickyForMobile = (sourceNode) => {
+    const clone = sourceNode.cloneNode(true);
+    clone.className = 'px-4 py-3';
+    return clone;
+  };
+  
+  mobileNotesToggle.addEventListener('click', () => {
+    const content = document.getElementById('mobile-notes-content');
+    const chevron = document.getElementById('notes-chevron');
+    const isHidden = content.classList.contains('hidden');
+    if (isHidden) {
+      content.classList.remove('hidden');
+      chevron.classList.add('rotate-180');
+    } else {
+      content.classList.add('hidden');
+      chevron.classList.remove('rotate-180');
+    }
+  });
+  
+  mobileNotesContainer.appendChild(mobileNotesToggle);
+  mobileNotesContainer.appendChild(mobileNotesContent);
+  
   boardLayout.appendChild(columnsWrapper);
-
   boardRoot.appendChild(boardLayout);
+  boardRoot.appendChild(mobileNotesContainer);
+  
+  // Re-render mobile notes when desktop notes are updated
+  const updateMobileNotes = () => {
+    const desktopNotesLane = document.getElementById('sticky-notes-lane-desktop');
+    if (desktopNotesLane) {
+      const mobileContent = document.getElementById('mobile-notes-content');
+      const notesWrap = desktopNotesLane.querySelector('.mt-2');
+      if (notesWrap) {
+        const cloned = notesWrap.cloneNode(true);
+        cloned.className = 'px-4 py-3 mt-0';
+        mobileContent.innerHTML = '';
+        mobileContent.appendChild(cloned);
+      }
+    }
+  };
+  
+  // Initial update for mobile notes
+  setTimeout(updateMobileNotes, 100);
+  
   _initColumnDrag(board.id, columns);
 }
 
@@ -741,7 +808,8 @@ function _normalizeStickyNotes(notes) {
 
 function _buildStickyNotesLane(board) {
   const lane = document.createElement('aside');
-  lane.className = 'sticky-notes-lane w-fit flex-shrink-0 rounded-lg border border-amber-200/80 bg-amber-50/60 px-2.5 py-2 shadow-sm';
+  lane.className = 'sticky-notes-lane hidden lg:flex lg:w-fit flex-shrink-0 rounded-lg border border-amber-200/80 bg-amber-50/60 px-2.5 py-2 shadow-sm lg:flex-col';
+  lane.id = 'sticky-notes-lane-desktop';
 
   const notes = _normalizeStickyNotes(board.stickyNotes);
   let workingNotes = [...notes];
@@ -896,7 +964,20 @@ function _buildStickyNotesLane(board) {
         ta.style.height = 'auto';
         ta.style.height = `${ta.scrollHeight}px`;
       });
+      // Sync mobile drawer with desktop notes
+      _syncMobileNotesDrawer();
     });
+  };
+  
+  /** Syncs mobile notes drawer with desktop version */
+  const _syncMobileNotesDrawer = () => {
+    const mobileContent = document.getElementById('mobile-notes-content');
+    if (!mobileContent) return;
+    
+    const clonedNotes = notesWrap.cloneNode(true);
+    clonedNotes.className = 'px-4 py-3 mt-0';
+    mobileContent.innerHTML = '';
+    mobileContent.appendChild(clonedNotes);
   };
 
   const palette = ['#fde68a', '#fecaca', '#bfdbfe', '#bbf7d0', '#ddd6fe'];
@@ -986,7 +1067,7 @@ function _initDeckColorListener() {
 function buildColumnEl(col, boardId, allColumns) {
   const el = document.createElement('div');
   el.className        = [
-    'column relative flex flex-col w-72 flex-shrink-0 rounded-xl p-3',
+    'column relative flex flex-col w-72 md:w-80 lg:w-96 flex-shrink-0 rounded-xl p-3',
     'bg-gradient-to-br from-[#17181c] via-[#0b0c0e] to-[#050506]',
     'border border-white/10 shadow-[0_14px_30px_rgba(0,0,0,0.28)]',
   ].join(' ');

@@ -23,12 +23,13 @@ import { renderBoard, setBoardId, createColumnBlock, resetColumnWidths, refreshS
 import { subscribeToCards, unsubscribeFromCards, initCardEvents, setBoardAssignedMembers, getBoardAssignedMembers, renderListView, renderCalendarView, getCardsSnapshot } from './cards.js';
 import { renderBoardsHome, openCreateBoardModal }                 from './boards-home.js';
 import { initAiChat, setAiChatMode, openAiChatWithPrompt, collapseAiChat, expandAiChat } from './ai-chat.js';
+import { initMobileNav } from './mobile-nav.js';
 import { doc, getDoc }                                             from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL }          from 'firebase/storage';
 import { updateProfile }                                           from 'firebase/auth';
 import { db, functions, storage, auth as firebaseAuth }            from './firebase.js';
 import { ensureUserProfile, claimUsername, validateUsername, checkUsernameAvailable, updateUserDisplayName, updateUserPhotoURL, getUserProfile, getAllUsers, setUserAdminStatus } from './users.js';
-import { createOrg, getOrgById, getOrgMembers, addMemberByUsername, removeMember, setOrgMemberRole, getAllOrganizations } from './org.js';
+import { createOrg, getOrgById, getOrgMembers, addMemberByUsername, removeMember, setOrgMemberRole, getAllOrganizations, isOrgAiUsageAllowed, setOrgAiUsageSetting } from './org.js';
 import { BILLING_PLANS, getPlanConfig, getUserPlan, getUserBillingContext, canCreateOrganization, ensureBillingDefaults }      from './billing.js';
 import { httpsCallable }                                           from 'firebase/functions';
 
@@ -238,9 +239,14 @@ async function _openBoard(boardId, board) {
           orgNameEl.classList.add('hidden');
         }
       });
+      // Check org AI usage setting
+      isOrgAiUsageAllowed(boardObj.orgId).then((allowed) => {
+        _applyOrgAiRestrictions(!allowed);
+      });
     } else {
       orgNameEl.textContent = '';
       orgNameEl.classList.add('hidden');
+      _applyOrgAiRestrictions(false); // No restriction for personal boards
     }
   }
 
@@ -283,6 +289,8 @@ async function _openBoard(boardId, board) {
   _showView('board');
   // Board view is now visible — measure sticky textarea heights correctly.
   requestAnimationFrame(() => refreshStickyNoteHeights());
+  // Initialize mobile navigation menus
+  initMobileNav();
 }
 
 function _applyBoardView(mode = 'kanban') {
@@ -310,6 +318,27 @@ function _applyBoardView(mode = 'kanban') {
   if (mode === 'list') renderListView();
   if (mode === 'calendar') renderCalendarView();
   if (mode === 'timeline') _renderTimelineInPage();
+}
+
+function _applyOrgAiRestrictions(restricted) {
+  const aiButtons = [
+    document.getElementById('ai-trigger-btn'),
+    document.getElementById('ai-board-help-btn-board'),
+    document.getElementById('ai-dashboard-btn'),
+    document.getElementById('mobile-ai-chat-toggle'),
+  ];
+  
+  aiButtons.forEach((btn) => {
+    if (btn) {
+      if (restricted) {
+        btn.style.display = 'none';
+        btn.disabled = true;
+      } else {
+        btn.style.display = '';
+        btn.disabled = false;
+      }
+    }
+  });
 }
 
 function _openAiDashboardPage() {
@@ -2458,6 +2487,7 @@ async function _openOrganizationsPage() {
   const isOrgAdmin = Boolean(org && (isOwner || (Array.isArray(org.admins) && org.admins.includes(_user.uid))));
   const orgOwnerProfile = org?.ownerId ? await getUserProfile(org.ownerId) : null;
   const orgPlan = getPlanConfig(orgOwnerProfile?.billingPlan || 'free');
+  const createOrgGate = await canCreateOrganization(_user.uid);
 
   // Admins see all members; regular members only see owner + admins
   let members = [];
@@ -2541,6 +2571,24 @@ async function _openOrganizationsPage() {
 
       ${isOrgAdmin ? `
       <section class="rounded-xl border border-gray-200 bg-white p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-3">Organization Settings</h3>
+        <div class="space-y-3">
+          <label class="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" id="org-ai-usage-toggle" ${org?.allowAiUsage !== false ? 'checked' : ''} 
+              class="w-4 h-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500" />
+            <span class="flex-1">
+              <span class="text-sm font-medium text-gray-700">Allow AI Usage with Gemini</span>
+              <p class="text-xs text-gray-500">When enabled, organization members can use AI Dealer features</p>
+            </span>
+          </label>
+        </div>
+        <p id="org-ai-error" class="hidden mt-2 text-xs text-red-600"></p>
+        <p id="org-ai-success" class="hidden mt-2 text-xs text-emerald-700"></p>
+      </section>
+      ` : ''}
+
+      ${isOrgAdmin ? `
+      <section class="rounded-xl border border-gray-200 bg-white p-5">
         <h3 class="text-sm font-semibold text-gray-800 mb-2">Manage Members</h3>
         <div class="space-y-4">
           <div>
@@ -2572,6 +2620,25 @@ async function _openOrganizationsPage() {
         <p id="org-settings-success" class="hidden mt-2 text-xs text-emerald-700"></p>
       </section>
       ` : ''}
+
+      ${createOrgGate?.personalPlan?.canUseOrg ? `
+      <section class="rounded-xl border border-gray-200 bg-white p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-2">Create Another Organization</h3>
+        <p class="text-xs text-gray-500 mb-3">
+          Your plan allows up to ${createOrgGate.orgLimit} organization${createOrgGate.orgLimit === 1 ? '' : 's'}. You currently own ${createOrgGate.ownedCount}.
+        </p>
+        <form id="org-create-additional-form" class="space-y-2">
+          <input id="org-name-input-additional" type="text" maxlength="80" placeholder="New organization name"
+            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          <button type="submit" ${createOrgGate.allowed ? '' : 'disabled'}
+            class="w-full px-3 py-2 text-sm font-medium text-white rounded-lg ${createOrgGate.allowed ? 'bg-brand-500 hover:bg-brand-600' : 'bg-gray-300 cursor-not-allowed'}">
+            Create additional org
+          </button>
+        </form>
+        ${createOrgGate.allowed ? '' : `<p class="mt-2 text-xs text-amber-700">${_escHtml(createOrgGate.reason || 'Organization creation is currently unavailable.')}</p>`}
+        <p id="org-create-additional-error" class="hidden mt-2 text-xs text-red-600"></p>
+      </section>
+      ` : ''}
     </div>
   ` : `
     <div class="max-w-xl mx-auto rounded-xl border border-gray-200 bg-white p-6">
@@ -2601,6 +2668,25 @@ async function _openOrganizationsPage() {
     } catch (err) {
       errorEl.textContent = err.message || 'Could not create organization.';
       errorEl.classList.remove('hidden');
+    }
+  });
+
+  document.getElementById('org-create-additional-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const extraErrorEl = document.getElementById('org-create-additional-error');
+    if (extraErrorEl) extraErrorEl.classList.add('hidden');
+    const name = document.getElementById('org-name-input-additional')?.value?.trim() || '';
+    if (!name) return;
+    try {
+      const gate = await canCreateOrganization(_user.uid);
+      if (!gate.allowed) throw new Error(gate.reason || 'Organization creation is not allowed for this account.');
+      await createOrg(_user.uid, name);
+      await _openOrganizationsPage();
+    } catch (err) {
+      if (extraErrorEl) {
+        extraErrorEl.textContent = err.message || 'Could not create organization.';
+        extraErrorEl.classList.remove('hidden');
+      }
     }
   });
 
@@ -2693,6 +2779,28 @@ async function _openOrganizationsPage() {
         errorEl.classList.remove('hidden');
       }
     });
+  });
+
+  // AI usage setting toggle
+  const aiErrorEl = document.getElementById('org-ai-error');
+  const aiSuccessEl = document.getElementById('org-ai-success');
+  document.getElementById('org-ai-usage-toggle')?.addEventListener('change', async (e) => {
+    try {
+      const allow = e.target.checked;
+      await setOrgAiUsageSetting(org.id, allow);
+      if (aiErrorEl) aiErrorEl.classList.add('hidden');
+      if (aiSuccessEl) {
+        aiSuccessEl.textContent = allow ? 'AI usage enabled for this organization' : 'AI usage disabled for this organization';
+        aiSuccessEl.classList.remove('hidden');
+      }
+    } catch (err) {
+      if (aiErrorEl) {
+        aiErrorEl.textContent = err.message || 'Could not update AI setting.';
+        aiErrorEl.classList.remove('hidden');
+      }
+      // Revert the checkbox on error
+      e.target.checked = !e.target.checked;
+    }
   });
 }
 

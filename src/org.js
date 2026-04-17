@@ -3,10 +3,11 @@
  * @description
  * Organization management: create, fetch, add/remove members.
  *
- * Each user can belong to at most one organization (organizationId on the
- * user doc). An owner can create exactly one org (ownedOrgId on the user doc).
+ * Users can own multiple organizations (based on plan limits).
+ * Users can belong to one organization (organizationId on user doc).
  *
  * Collection: /organizations/{orgId}
+ * org.allowAiUsage - boolean, whether org members can use AI features (default: true)
  */
 
 import {
@@ -32,13 +33,30 @@ import { getPlanConfig }               from './billing.js';
 
 /**
  * Creates a new organization owned by the given user.
- * Sets organizationId and ownedOrgId on the user doc.
+ * Checks plan limits for org count.
+ * Adds allowAiUsage setting (default: true).
  *
  * @param {string} uid
  * @param {string} name
  * @returns {Promise<string>} New org document ID
+ * @throws {Error} if user has reached org limit for their plan
  */
 export async function createOrg(uid, name) {
+  // Check org count limit based on plan
+  const userSnap = await getDoc(doc(db, 'users', uid));
+  const userData = userSnap.exists() ? (userSnap.data() || {}) : {};
+  const userPlan = getPlanConfig(userData.billingPlan || 'free');
+  const orgLimit = userPlan.orgLimitCount || 0;
+  
+  if (orgLimit <= 0) {
+    throw new Error(`Your ${userPlan.label} plan does not allow creating organizations.`);
+  }
+  
+  const ownedOrgIds = Array.isArray(userData.ownedOrgIds) ? userData.ownedOrgIds : [];
+  if (ownedOrgIds.length >= orgLimit) {
+    throw new Error(`Your ${userPlan.label} plan allows up to ${orgLimit} organization${orgLimit === 1 ? '' : 's'}. You have reached the limit.`);
+  }
+  
   const orgRef = await addDoc(collection(db, 'organizations'), {
     name:      name.trim(),
     ownerId:   uid,
@@ -47,12 +65,17 @@ export async function createOrg(uid, name) {
     memberRoles: {
       [uid]: 'owner',
     },
+    allowAiUsage: true,
     createdAt: serverTimestamp(),
   });
+  
+  // Update user doc with new org in ownedOrgIds array
+  ownedOrgIds.push(orgRef.id);
   await updateDoc(doc(db, 'users', uid), {
-    ownedOrgId:     orgRef.id,
+    ownedOrgIds: ownedOrgIds,
     organizationId: orgRef.id,
   });
+  
   return orgRef.id;
 }
 
@@ -207,4 +230,35 @@ export async function setOrgMemberRole(orgId, uid, role) {
 export async function getAllOrganizations() {
   const snap = await getDocs(collection(db, 'organizations'));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+// ─── Organization Settings ────────────────────────────────────────────────────
+
+/**
+ * Updates org AI usage setting.
+ * Only owners/admins can update org settings.
+ *
+ * @param {string} orgId
+ * @param {boolean} allowAiUsage
+ * @returns {Promise<void>}
+ */
+export async function setOrgAiUsageSetting(orgId, allowAiUsage) {
+  const org = await getOrgById(orgId);
+  if (!org) throw new Error('Organization not found.');
+
+  await updateDoc(doc(db, 'organizations', orgId), {
+    allowAiUsage: Boolean(allowAiUsage),
+  });
+}
+
+/**
+ * Checks if AI usage is allowed for an organization.
+ *
+ * @param {string} orgId
+ * @returns {Promise<boolean>}
+ */
+export async function isOrgAiUsageAllowed(orgId) {
+  const org = await getOrgById(orgId);
+  if (!org) return false;
+  return org.allowAiUsage !== false; // Default to true if not set
 }

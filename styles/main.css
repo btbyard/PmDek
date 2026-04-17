@@ -898,6 +898,318 @@ html.pm-dark #ai-chat-input::placeholder {
   color: #94a3b8 !important;
 }
 
+/* ── Mobile-friendly Notes and Decks ─────────────────────────────────────── */
+
+/* AI Chat sidebar mobile handling */
+#ai-chat-sidebar {
+  display: none !important;
+}
+
+@media (min-width: 768px) {
+  #ai-chat-sidebar {
+    display: flex !important;
+  }
+}
+
+/* Mobile AI chat modal styling */
+#ai-chat-sidebar.mobile-ai-modal {
+  position: fixed;
+  top: 0;
+  right: auto;
+  bottom: 0;
+  left: 0;
+  width: 100vw !important;
+  height: 100dvh;
+  max-width: 100%;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+  z-index: 50;
+  display: flex !important;
+  flex-direction: column;
+}
+
+body.ai-mobile-chat-open {
+  overflow: hidden;
+}
+
+/* Hide mobile AI toggle on desktop */
+#mobile-ai-chat-toggle {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  #mobile-ai-chat-toggle {
+    display: flex !important;
+  }
+}
+
+/* Hide all AI buttons on mobile */
+@media (max-width: 767px) {
+  #ai-trigger-btn,
+  #ai-board-help-btn-board,
+  #ai-dashboard-btn,
+  #ai-board-btn,
+  #ai-board-help-btn {
+    display: none !important;
+  }
+
+  .board-brand-text {
+    display: none;
+  }
+
+  #board-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'left center right'
+      'views views views';
+    gap: 0.4rem 0.55rem;
+    align-items: center;
+  }
+
+  #board-header-center {
+    grid-area: center;
+    width: auto;
+    justify-content: flex-start;
+    overflow: hidden;
+    padding-bottom: 0;
+    min-width: 0;
+  }
+
+  #deck-prev-btn,
+  #deck-next-btn {
+    display: none;
+  }
+
+  #board-title-picker-btn {
+    padding-left: 0.15rem;
+    padding-right: 0.15rem;
+  }
+
+  #back-to-boards-btn {
+    display: none;
+  }
+
+  #board-title-display {
+    font-size: 1.05rem;
+    max-width: 46vw;
+  }
+
+  #board-header-left {
+    grid-area: left;
+    min-width: 0;
+  }
+
+  #board-header-left img {
+    height: 1.75rem;
+    width: auto;
+  }
+
+  #board-header-right {
+    grid-area: right;
+    justify-self: end;
+    width: auto;
+    gap: 0.4rem;
+  }
+
+  #account-menu-btn-board {
+    width: auto;
+    justify-content: flex-start;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 0.45rem 0.5rem;
+  }
+
+  #mobile-ai-chat-toggle {
+    display: inline-flex !important;
+  }
+
+  #board-search-bar {
+    flex-wrap: nowrap;
+    align-items: center;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #board-search-bar > .relative:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  #board-search-input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  #board-search-bar .ml-auto {
+    margin-left: auto;
+    width: auto;
+    overflow: visible;
+    white-space: normal;
+    flex-wrap: nowrap;
+    padding-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  .add-column-btn,
+  #deck-column-bg-btn,
+  #deck-task-bg-btn {
+    width: 2rem !important;
+    height: 2rem !important;
+    margin-top: 0 !important;
+  }
+
+  .add-column-btn svg,
+  #deck-column-bg-btn svg,
+  #deck-task-bg-btn svg {
+    width: 1rem !important;
+    height: 1rem !important;
+  }
+
+  .move-card-prev-btn,
+  .move-card-next-btn {
+    width: 15px;
+    height: 15px;
+    bottom: 4px;
+  }
+}
+/* Desktop: sticky notes on the left */
+@media (min-width: 1024px) {
+  #sticky-notes-lane-desktop {
+    display: flex !important;
+  }
+  
+  #mobile-notes-drawer {
+    display: none !important;
+  }
+}
+
+/* Mobile and tablet: sticky notes as bottom drawer */
+@media (max-width: 1023px) {
+  #sticky-notes-lane-desktop {
+    display: none !important;
+  }
+  
+  #mobile-notes-drawer {
+    display: block !important;
+    bottom: 0;
+  }
+  
+  #mobile-notes-content {
+    max-height: 40vh;
+  }
+  
+  #board-view > main {
+    padding-bottom: 5rem;
+  }
+}
+
+/* Column responsive sizing on tablets and mobile */
+@media (max-width: 1024px) {
+  .column {
+    width: 20rem !important; /* 320px - tablet size */
+  }
+}
+
+@media (max-width: 768px) {
+  .column {
+    width: 16rem !important; /* 256px - mobile size */
+    padding: 0.625rem !important; /* Slightly smaller padding */
+  }
+  
+  .card {
+    font-size: 0.875rem !important;
+  }
+  
+  /* Reduce column header size on mobile */
+  .col-header {
+    margin-bottom: 0.5rem !important;
+  }
+  
+  .col-title-input {
+    font-size: 0.875rem !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .column {
+    width: 14rem !important; /* 224px - small phone */
+    padding: 0.5rem !important;
+  }
+  
+  #columns-wrapper {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+    gap: 0.75rem !important;
+  }
+  
+  #board-view > main {
+    padding-bottom: 5.5rem;
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+  
+  .column .col-header {
+    gap: 0.25rem !important;
+  }
+
+  /* Make card text smaller on tiny screens */
+  .card-title {
+    font-size: 0.8125rem !important;
+    line-height: 1.2;
+  }
+  
+  .card-desc {
+    font-size: 0.75rem !important;
+  }
+}
+
+/* Sticky notes styling improvements */
+.sticky-stack-card {
+  border-radius: 0.375rem;
+  min-width: 200px;
+  max-width: 100%;
+}
+
+/* Mobile notes drawer styling */
+#mobile-notes-toggle {
+  border-radius: 0;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+}
+
+#mobile-notes-content {
+  border-radius: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch; /* Better scrolling on iOS */
+}
+
+#mobile-notes-content .sticky-stack-card {
+  width: 100%;
+  min-width: auto;
+}
+
+#mobile-notes-content .sticky-stack-card textarea {
+  min-height: 60px !important;
+}
+
+/* Improve touch targets on mobile */
+@media (max-width: 768px) {
+  button, a, input[type="button"], input[type="submit"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Notifications and modals should be full-width on mobile */
+@media (max-width: 640px) {
+  .modal-backdrop > div {
+    margin: 0 !important;
+    max-height: 90vh !important;
+    width: 100% !important;
+    border-radius: 1rem 1rem 0 0 !important;
+  }
+}
+
 /* Sticky notes in dark mode: preserve paper-note text readability */
 html.pm-dark .sticky-stack-card textarea,
 html.pm-dark .sticky-stack-card textarea:focus {

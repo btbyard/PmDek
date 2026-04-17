@@ -57,6 +57,11 @@ export function initAiChat(user, { onBoardCreated } = {}) {
     ?.addEventListener('click', () => {
       const sidebar = document.getElementById('ai-chat-sidebar');
       if (!sidebar) return;
+      const isMobile = window.matchMedia('(max-width: 767px)').matches;
+      if (isMobile || sidebar.classList.contains('mobile-ai-modal')) {
+        closeAiChat();
+        return;
+      }
       if (sidebar.classList.contains('ai-chat-collapsed')) {
         expandAiChat();
       } else {
@@ -177,7 +182,21 @@ export function openAiChatWithPrompt(prompt, { expand = false } = {}) {
 
 export function closeAiChat() {
   const sidebar = document.getElementById('ai-chat-sidebar');
-  if (sidebar?.classList.contains('ai-chat-pinned')) return;
+  if (!sidebar) return;
+
+  const isMobile = window.matchMedia('(max-width: 767px)').matches;
+  if (isMobile || sidebar.classList.contains('mobile-ai-modal')) {
+    sidebar.classList.remove('mobile-ai-modal', 'ai-chat-expanded', 'ai-chat-collapsed');
+    sidebar.style.display = 'none';
+    document.body.classList.remove('ai-mobile-chat-open');
+    document.getElementById('mobile-ai-chat-toggle')?.classList.remove('active');
+    _setButtonsActive(false);
+    _syncChatHeader();
+    _syncLayoutInset();
+    return;
+  }
+
+  if (sidebar.classList.contains('ai-chat-pinned')) return;
   collapseAiChat();
 }
 
