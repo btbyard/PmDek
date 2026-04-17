@@ -190,6 +190,7 @@ export function closeAiChat() {
     sidebar.style.display = 'none';
     document.body.classList.remove('ai-mobile-chat-open');
     document.getElementById('mobile-ai-chat-toggle')?.classList.remove('active');
+    document.getElementById('mobile-ai-board-btn')?.classList.remove('active');
     _setButtonsActive(false);
     _syncChatHeader();
     _syncLayoutInset();

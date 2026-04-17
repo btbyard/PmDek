@@ -21,15 +21,35 @@ service cloud.firestore {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         && (
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.billingPlan in ['mid', 'pro', 'business-small', 'business-growth']
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.billingPlan in ['mid', 'pro', 'business-small', 'business-growth', 'enterprise']
           || request.auth.token.email in ['bradster8@yahoo.com']
         );
     }
 
+    function orgLimitForPlan(plan) {
+      return plan == 'enterprise' ? 999
+        : plan == 'business-growth' ? 1
+        : plan == 'business-small' ? 1
+        : plan == 'pro' ? 2
+        : plan == 'mid' ? 1
+        : 0;
+    }
+
+    function ownedOrgCount() {
+      return (
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ownedOrgIds is list)
+          ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ownedOrgIds.size()
+          : (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ownedOrgId != null
+              ? 1
+              : 0
+          )
+      );
+    }
+
     function canCreateOwnOrganization() {
       return canUseOrgFeatures()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId == null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ownedOrgId == null;
+        && ownedOrgCount() < orgLimitForPlan(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.billingPlan);
     }
 
     function orgSeatLimitForPlan(plan) {

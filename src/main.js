@@ -29,7 +29,7 @@ import { ref as storageRef, uploadBytes, getDownloadURL }          from 'firebas
 import { updateProfile }                                           from 'firebase/auth';
 import { db, functions, storage, auth as firebaseAuth }            from './firebase.js';
 import { ensureUserProfile, claimUsername, validateUsername, checkUsernameAvailable, updateUserDisplayName, updateUserPhotoURL, getUserProfile, getAllUsers, setUserAdminStatus } from './users.js';
-import { createOrg, getOrgById, getOrgMembers, addMemberByUsername, removeMember, setOrgMemberRole, getAllOrganizations, isOrgAiUsageAllowed, setOrgAiUsageSetting } from './org.js';
+import { createOrg, getOrgById, getOrgMembers, getUserOrganizations, addMemberByUsername, removeMember, setOrgMemberRole, getAllOrganizations, isOrgAiUsageAllowed, setOrgAiUsageSetting } from './org.js';
 import { BILLING_PLANS, getPlanConfig, getUserPlan, getUserBillingContext, canCreateOrganization, ensureBillingDefaults }      from './billing.js';
 import { httpsCallable }                                           from 'firebase/functions';
 
@@ -170,9 +170,23 @@ document.getElementById('back-from-admin-panel-btn')?.addEventListener('click', 
   await _showBoardsHome();
 });
 
-document.getElementById('ai-board-btn')?.addEventListener('click', () => {
+function _openAiDealerFromBoards() {
+  const sidebar = document.getElementById('ai-chat-sidebar');
+  const isMobile = window.matchMedia('(max-width: 767px)').matches;
+
+  if (isMobile && sidebar) {
+    sidebar.style.display = 'flex';
+    sidebar.classList.add('mobile-ai-modal', 'ai-chat-expanded');
+    sidebar.classList.remove('ai-chat-collapsed');
+    document.body.classList.add('ai-mobile-chat-open');
+    document.getElementById('mobile-ai-board-btn')?.classList.add('active');
+  }
+
   expandAiChat();
-});
+}
+
+document.getElementById('ai-board-btn')?.addEventListener('click', _openAiDealerFromBoards);
+document.getElementById('mobile-ai-board-btn')?.addEventListener('click', _openAiDealerFromBoards);
 
 document.getElementById('board-activity-log-btn')?.addEventListener('click', () => {
   _openBoardActivityModal();
@@ -2470,7 +2484,7 @@ async function _openAccountSettingsModal() {
   });
 }
 
-async function _openOrganizationsPage() {
+async function _openOrganizationsPage(preferredOrgId = null) {
   location.hash = 'organizations';
   _showView('organizations');
   const root = document.getElementById('organizations-root');
@@ -2482,37 +2496,144 @@ async function _openOrganizationsPage() {
     </div>`;
 
   _userProfile = await getUserProfile(_user.uid);
-  const org = _userProfile?.organizationId ? await getOrgById(_userProfile.organizationId) : null;
-  const isOwner = Boolean(org && org.ownerId === _user.uid);
-  const isOrgAdmin = Boolean(org && (isOwner || (Array.isArray(org.admins) && org.admins.includes(_user.uid))));
-  const orgOwnerProfile = org?.ownerId ? await getUserProfile(org.ownerId) : null;
-  const orgPlan = getPlanConfig(orgOwnerProfile?.billingPlan || 'free');
+  const userOrgs = await getUserOrganizations(_user.uid);
   const createOrgGate = await canCreateOrganization(_user.uid);
 
-  // Admins see all members; regular members only see owner + admins
+  const renderOrgCards = () => {
+    const cards = userOrgs.map((orgItem) => {
+      const role = orgItem.ownerId === _user.uid
+        ? 'Owner'
+        : (Array.isArray(orgItem.admins) && orgItem.admins.includes(_user.uid) ? 'Org Admin' : 'Member');
+      const memberCount = Array.isArray(orgItem.members) ? orgItem.members.length : 0;
+      const aiEnabled = orgItem.allowAiUsage !== false;
+      return `
+        <button type="button" data-org-id="${orgItem.id}" class="org-card w-full text-left rounded-xl border border-gray-200 bg-white p-4 hover:border-brand-300 hover:bg-brand-50/30 transition-colors">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <h3 class="text-base font-semibold text-gray-800 truncate">${_escHtml(orgItem.name || 'Organization')}</h3>
+              <p class="text-xs text-gray-500 mt-1">${role} • ${memberCount} member${memberCount === 1 ? '' : 's'}</p>
+              <p class="text-[11px] mt-1 ${aiEnabled ? 'text-emerald-700' : 'text-amber-700'}">AI: ${aiEnabled ? 'Enabled' : 'Disabled'}</p>
+            </div>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">Open</span>
+          </div>
+        </button>`;
+    }).join('');
+
+    if (!cards) {
+      return '<p class="text-sm text-gray-500">No organizations yet.</p>';
+    }
+    return cards;
+  };
+
+  const renderCreateOrgPanel = () => {
+    if (!createOrgGate?.personalPlan?.canUseOrg) {
+      return `
+        <section class="rounded-xl border border-gray-200 bg-white p-5">
+          <h3 class="text-sm font-semibold text-gray-800 mb-2">Create Organization</h3>
+          <p class="text-sm text-gray-500">Organizations are available on Mid, Pro, and Business plans.</p>
+        </section>`;
+    }
+
+    return `
+      <section class="rounded-xl border border-gray-200 bg-white p-5">
+        <h3 class="text-sm font-semibold text-gray-800 mb-2">Add Organization</h3>
+        <p class="text-xs text-gray-500 mb-3">Plan limit: ${createOrgGate.orgLimit} • Owned: ${createOrgGate.ownedCount}</p>
+        <form id="org-create-additional-form" class="space-y-2">
+          <input id="org-name-input-additional" type="text" maxlength="80" placeholder="New organization name"
+            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          <button type="submit" ${createOrgGate.allowed ? '' : 'disabled'}
+            class="w-full px-3 py-2 text-sm font-medium text-white rounded-lg ${createOrgGate.allowed ? 'bg-brand-500 hover:bg-brand-600' : 'bg-gray-300 cursor-not-allowed'}">
+            Create organization
+          </button>
+        </form>
+        ${createOrgGate.allowed ? '' : `<p class="mt-2 text-xs text-amber-700">${_escHtml(createOrgGate.reason || 'Organization creation is currently unavailable.')}</p>`}
+        <p id="org-create-additional-error" class="hidden mt-2 text-xs text-red-600"></p>
+      </section>`;
+  };
+
+  if (!preferredOrgId) {
+    root.innerHTML = `
+      <div class="space-y-5">
+        <section class="rounded-xl border border-gray-200 bg-white p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-lg font-semibold text-gray-800">My Organizations</h2>
+            <span class="text-xs text-gray-500">${userOrgs.length} org${userOrgs.length === 1 ? '' : 's'}</span>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            ${renderOrgCards()}
+          </div>
+        </section>
+        ${renderCreateOrgPanel()}
+      </div>`;
+
+    document.querySelectorAll('.org-card').forEach((card) => {
+      card.addEventListener('click', async () => {
+        await _openOrganizationsPage(card.dataset.orgId);
+      });
+    });
+
+    document.getElementById('org-create-additional-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const extraErrorEl = document.getElementById('org-create-additional-error');
+      if (extraErrorEl) extraErrorEl.classList.add('hidden');
+      const name = document.getElementById('org-name-input-additional')?.value?.trim() || '';
+      if (!name) return;
+      try {
+        const gate = await canCreateOrganization(_user.uid);
+        if (!gate.allowed) throw new Error(gate.reason || 'Organization creation is not allowed for this account.');
+        await createOrg(_user.uid, name);
+        await _openOrganizationsPage();
+      } catch (err) {
+        if (extraErrorEl) {
+          extraErrorEl.textContent = err.message || 'Could not create organization.';
+          extraErrorEl.classList.remove('hidden');
+        }
+      }
+    });
+
+    return;
+  }
+
+  const selectedOrg = userOrgs.find((o) => o.id === preferredOrgId) || userOrgs[0] || null;
+  if (!selectedOrg) {
+    root.innerHTML = `
+      <div class="max-w-xl mx-auto rounded-xl border border-gray-200 bg-white p-6">
+        <h2 class="text-xl font-semibold text-gray-800 mb-1">No organization found</h2>
+        <p class="text-sm text-gray-500 mb-4">Create your first organization to continue.</p>
+        <button id="org-back-to-list" class="px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Back to organizations</button>
+      </div>`;
+    document.getElementById('org-back-to-list')?.addEventListener('click', async () => _openOrganizationsPage());
+    return;
+  }
+
+  const isOwner = Boolean(selectedOrg.ownerId === _user.uid);
+  const isOrgAdmin = Boolean(isOwner || (Array.isArray(selectedOrg.admins) && selectedOrg.admins.includes(_user.uid)));
+  const orgOwnerProfile = selectedOrg.ownerId ? await getUserProfile(selectedOrg.ownerId) : null;
+  const orgPlan = getPlanConfig(orgOwnerProfile?.billingPlan || 'free');
+
   let members = [];
   try {
-    members = org ? await getOrgMembers(org.id) : [];
+    members = await getOrgMembers(selectedOrg.id);
   } catch (err) {
     console.warn('Could not load org members:', err);
   }
 
-  // For non-admins, filter to only show owner and admins
   const visibleMembers = isOrgAdmin
     ? members
-    : members.filter((m) => m.uid === org?.ownerId || (Array.isArray(org?.admins) && org.admins.includes(m.uid)));
+    : members.filter((m) => m.uid === selectedOrg.ownerId || (Array.isArray(selectedOrg.admins) && selectedOrg.admins.includes(m.uid)));
 
   const memberRows = visibleMembers.map((m) => {
     const label = m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`;
-    const rowIsOwner = org && m.uid === org.ownerId;
-    const rowIsAdmin = rowIsOwner || (Array.isArray(org?.admins) && org.admins.includes(m.uid));
-    const roleMap = org?.memberRoles && typeof org.memberRoles === 'object' ? org.memberRoles : {};
+    const rowIsOwner = m.uid === selectedOrg.ownerId;
+    const rowIsAdmin = rowIsOwner || (Array.isArray(selectedOrg.admins) && selectedOrg.admins.includes(m.uid));
+    const roleMap = selectedOrg.memberRoles && typeof selectedOrg.memberRoles === 'object' ? selectedOrg.memberRoles : {};
     const persistedRole = String(roleMap[m.uid] || '').toLowerCase();
     const effectiveRole = rowIsOwner
       ? 'owner'
       : rowIsAdmin
         ? 'admin'
         : (persistedRole === 'read-only' || persistedRole === 'collaborator' ? persistedRole : 'collaborator');
+
     const roleControl = rowIsOwner
       ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">Owner</span>'
       : isOrgAdmin
@@ -2546,148 +2667,94 @@ async function _openOrganizationsPage() {
       </div>`;
   }).join('');
 
-  root.innerHTML = org ? `
-    <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
-      <section class="xl:col-span-2 rounded-xl border border-gray-200 bg-white p-5">
-        <div class="flex items-center justify-between mb-3">
-          <div>
-            <h2 class="text-xl font-semibold text-gray-800">${_escHtml(org.name || 'Organization')}</h2>
-            <p class="text-xs text-gray-500">${isOwner ? 'You are the owner' : (isOrgAdmin ? 'You are an org admin' : 'You are a member')}</p>
-            <p class="text-xs text-brand-700 mt-0.5">Plan: ${_escHtml(orgPlan.label)} (${_escHtml(orgPlan.key)})</p>
+  root.innerHTML = `
+    <div class="space-y-5">
+      <div class="flex items-center justify-between">
+        <button id="org-back-to-list" class="text-sm text-gray-500 hover:text-brand-600 transition-colors">← Back to all organizations</button>
+        <span class="text-xs text-gray-500">${userOrgs.length} total org${userOrgs.length === 1 ? '' : 's'}</span>
+      </div>
+
+      <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        <section class="xl:col-span-2 rounded-xl border border-gray-200 bg-white p-5">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h2 class="text-xl font-semibold text-gray-800">${_escHtml(selectedOrg.name || 'Organization')}</h2>
+              <p class="text-xs text-gray-500">${isOwner ? 'You are the owner' : (isOrgAdmin ? 'You are an org admin' : 'You are a member')}</p>
+              <p class="text-xs text-brand-700 mt-0.5">Plan: ${_escHtml(orgPlan.label)} (${_escHtml(orgPlan.key)})</p>
+            </div>
+            <div class="text-xs text-gray-500">${isOrgAdmin ? `Members: ${members.length}` : ''}</div>
           </div>
-          <div class="text-xs text-gray-500">${isOrgAdmin ? `Members: ${members.length}` : ''}</div>
-        </div>
-        <h3 class="text-xs font-medium text-gray-500 mb-1">${isOrgAdmin ? 'All Members' : 'Organization Managers'}</h3>
+          <h3 class="text-xs font-medium text-gray-500 mb-1">${isOrgAdmin ? 'All Members' : 'Organization Managers'}</h3>
+          ${isOrgAdmin ? `
+          <div class="mb-2">
+            <input id="org-members-search" type="text" placeholder="Search members by name or username"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+          </div>
+          ` : ''}
+          <div class="rounded-lg border border-gray-200 px-3">
+            ${memberRows || '<p class="text-sm text-gray-500 py-2">No members yet.</p>'}
+          </div>
+        </section>
+
         ${isOrgAdmin ? `
-        <div class="mb-2">
-          <input id="org-members-search" type="text" placeholder="Search members by name or username"
-            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-        </div>
+        <section class="rounded-xl border border-gray-200 bg-white p-5">
+          <h3 class="text-sm font-semibold text-gray-800 mb-3">Organization Settings</h3>
+          <div class="space-y-3">
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" id="org-ai-usage-toggle" ${selectedOrg.allowAiUsage !== false ? 'checked' : ''}
+                class="w-4 h-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500" />
+              <span class="flex-1">
+                <span class="text-sm font-medium text-gray-700">Allow AI Usage with Gemini</span>
+                <p class="text-xs text-gray-500">When enabled, organization members can use AI Dealer features</p>
+              </span>
+            </label>
+          </div>
+          <p id="org-ai-error" class="hidden mt-2 text-xs text-red-600"></p>
+          <p id="org-ai-success" class="hidden mt-2 text-xs text-emerald-700"></p>
+        </section>
         ` : ''}
-        <div class="rounded-lg border border-gray-200 px-3">
-          ${memberRows || '<p class="text-sm text-gray-500 py-2">No members yet.</p>'}
-        </div>
-      </section>
 
-      ${isOrgAdmin ? `
-      <section class="rounded-xl border border-gray-200 bg-white p-5">
-        <h3 class="text-sm font-semibold text-gray-800 mb-3">Organization Settings</h3>
-        <div class="space-y-3">
-          <label class="flex items-center gap-3 cursor-pointer">
-            <input type="checkbox" id="org-ai-usage-toggle" ${org?.allowAiUsage !== false ? 'checked' : ''} 
-              class="w-4 h-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500" />
-            <span class="flex-1">
-              <span class="text-sm font-medium text-gray-700">Allow AI Usage with Gemini</span>
-              <p class="text-xs text-gray-500">When enabled, organization members can use AI Dealer features</p>
-            </span>
-          </label>
-        </div>
-        <p id="org-ai-error" class="hidden mt-2 text-xs text-red-600"></p>
-        <p id="org-ai-success" class="hidden mt-2 text-xs text-emerald-700"></p>
-      </section>
-      ` : ''}
+        ${isOrgAdmin ? `
+        <section class="rounded-xl border border-gray-200 bg-white p-5">
+          <h3 class="text-sm font-semibold text-gray-800 mb-2">Manage Members</h3>
+          <div class="space-y-4">
+            <div>
+              <p class="text-xs font-semibold text-gray-600 mb-1">Add Existing Account User</p>
+              <form id="org-invite-form" class="space-y-2">
+                <input id="org-invite-username" type="text" maxlength="20" placeholder="username"
+                  class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+                <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Add existing user</button>
+              </form>
+              <p class="mt-1 text-xs text-gray-500">Use username only (without @).</p>
+            </div>
 
-      ${isOrgAdmin ? `
-      <section class="rounded-xl border border-gray-200 bg-white p-5">
-        <h3 class="text-sm font-semibold text-gray-800 mb-2">Manage Members</h3>
-        <div class="space-y-4">
-          <div>
-            <p class="text-xs font-semibold text-gray-600 mb-1">Add Existing Account User</p>
-            <form id="org-invite-form" class="space-y-2">
-              <input id="org-invite-username" type="text" maxlength="20" placeholder="username"
-                class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-              <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Add existing user</button>
-            </form>
-            <p class="mt-1 text-xs text-gray-500">Use username only (without @).</p>
+            <div class="border-t border-gray-100 pt-3">
+              <p class="text-xs font-semibold text-gray-600 mb-1">Add New User (Email Invite)</p>
+              <form id="org-email-invite-form" class="space-y-2">
+                <input id="org-invite-email" type="email" maxlength="160" placeholder="user@example.com"
+                  class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
+                <select id="org-invite-role" class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+                  <option value="collaborator">Collaborator</option>
+                  <option value="read-only">Read-only</option>
+                  <option value="admin">Org Admin</option>
+                </select>
+                <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 rounded-lg">Send invite email</button>
+              </form>
+              <p class="mt-1 text-xs text-gray-500">Opens your email app with a prefilled invite message and join link.</p>
+            </div>
           </div>
-
-          <div class="border-t border-gray-100 pt-3">
-            <p class="text-xs font-semibold text-gray-600 mb-1">Add New User (Email Invite)</p>
-            <form id="org-email-invite-form" class="space-y-2">
-              <input id="org-invite-email" type="email" maxlength="160" placeholder="user@example.com"
-                class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-              <select id="org-invite-role" class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
-                <option value="collaborator">Collaborator</option>
-                <option value="read-only">Read-only</option>
-                <option value="admin">Org Admin</option>
-              </select>
-              <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 rounded-lg">Send invite email</button>
-            </form>
-            <p class="mt-1 text-xs text-gray-500">Opens your email app with a prefilled invite message and join link.</p>
-          </div>
-        </div>
-        <p id="org-settings-error" class="hidden mt-2 text-xs text-red-600"></p>
-        <p id="org-settings-success" class="hidden mt-2 text-xs text-emerald-700"></p>
-      </section>
-      ` : ''}
-
-      ${createOrgGate?.personalPlan?.canUseOrg ? `
-      <section class="rounded-xl border border-gray-200 bg-white p-5">
-        <h3 class="text-sm font-semibold text-gray-800 mb-2">Create Another Organization</h3>
-        <p class="text-xs text-gray-500 mb-3">
-          Your plan allows up to ${createOrgGate.orgLimit} organization${createOrgGate.orgLimit === 1 ? '' : 's'}. You currently own ${createOrgGate.ownedCount}.
-        </p>
-        <form id="org-create-additional-form" class="space-y-2">
-          <input id="org-name-input-additional" type="text" maxlength="80" placeholder="New organization name"
-            class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-          <button type="submit" ${createOrgGate.allowed ? '' : 'disabled'}
-            class="w-full px-3 py-2 text-sm font-medium text-white rounded-lg ${createOrgGate.allowed ? 'bg-brand-500 hover:bg-brand-600' : 'bg-gray-300 cursor-not-allowed'}">
-            Create additional org
-          </button>
-        </form>
-        ${createOrgGate.allowed ? '' : `<p class="mt-2 text-xs text-amber-700">${_escHtml(createOrgGate.reason || 'Organization creation is currently unavailable.')}</p>`}
-        <p id="org-create-additional-error" class="hidden mt-2 text-xs text-red-600"></p>
-      </section>
-      ` : ''}
-    </div>
-  ` : `
-    <div class="max-w-xl mx-auto rounded-xl border border-gray-200 bg-white p-6">
-      <h2 class="text-xl font-semibold text-gray-800 mb-1">Create your organization</h2>
-      <p class="text-sm text-gray-500 mb-4">Organizations are available on Mid, Pro, and Business plans.</p>
-      <form id="org-create-form" class="flex gap-2">
-        <input id="org-name-input" type="text" maxlength="80" placeholder="Organization name"
-          class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500" />
-        <button type="submit" class="px-3 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg">Create</button>
-      </form>
-      <p id="org-settings-error" class="hidden mt-2 text-xs text-red-600"></p>
-    </div>
-  `;
+          <p id="org-settings-error" class="hidden mt-2 text-xs text-red-600"></p>
+          <p id="org-settings-success" class="hidden mt-2 text-xs text-emerald-700"></p>
+        </section>
+        ` : ''}
+      </div>
+    </div>`;
 
   const errorEl = document.getElementById('org-settings-error');
   const successEl = document.getElementById('org-settings-success');
 
-  document.getElementById('org-create-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = document.getElementById('org-name-input')?.value?.trim() || '';
-    if (!name) return;
-    try {
-      const gate = await canCreateOrganization(_user.uid);
-      if (!gate.allowed) throw new Error(gate.reason || 'Organization creation is not allowed for this account.');
-      await createOrg(_user.uid, name);
-      await _openOrganizationsPage();
-    } catch (err) {
-      errorEl.textContent = err.message || 'Could not create organization.';
-      errorEl.classList.remove('hidden');
-    }
-  });
-
-  document.getElementById('org-create-additional-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const extraErrorEl = document.getElementById('org-create-additional-error');
-    if (extraErrorEl) extraErrorEl.classList.add('hidden');
-    const name = document.getElementById('org-name-input-additional')?.value?.trim() || '';
-    if (!name) return;
-    try {
-      const gate = await canCreateOrganization(_user.uid);
-      if (!gate.allowed) throw new Error(gate.reason || 'Organization creation is not allowed for this account.');
-      await createOrg(_user.uid, name);
-      await _openOrganizationsPage();
-    } catch (err) {
-      if (extraErrorEl) {
-        extraErrorEl.textContent = err.message || 'Could not create organization.';
-        extraErrorEl.classList.remove('hidden');
-      }
-    }
+  document.getElementById('org-back-to-list')?.addEventListener('click', async () => {
+    await _openOrganizationsPage();
   });
 
   document.getElementById('org-invite-form')?.addEventListener('submit', async (e) => {
@@ -2701,8 +2768,8 @@ async function _openOrganizationsPage() {
       return;
     }
     try {
-      await addMemberByUsername(org.id, username, org.id);
-      await _openOrganizationsPage();
+      await addMemberByUsername(selectedOrg.id, username, selectedOrg.id);
+      await _openOrganizationsPage(selectedOrg.id);
     } catch (err) {
       errorEl.textContent = err.message || 'Could not add member.';
       errorEl.classList.remove('hidden');
@@ -2725,13 +2792,13 @@ async function _openOrganizationsPage() {
 
     try {
       const baseUrl = `${window.location.origin}${window.location.pathname}`;
-      const inviteUrl = `${baseUrl}?orgInvite=1&orgId=${encodeURIComponent(org.id)}&role=${encodeURIComponent(role)}`;
+      const inviteUrl = `${baseUrl}?orgInvite=1&orgId=${encodeURIComponent(selectedOrg.id)}&role=${encodeURIComponent(role)}`;
       const roleLabel = role === 'read-only' ? 'Read-only' : (role === 'admin' ? 'Org Admin' : 'Collaborator');
-      const subject = `Invitation to join ${org.name} on PMDeck`;
+      const subject = `Invitation to join ${selectedOrg.name} on PMDeck`;
       const body = [
         `Hi,`,
         ``,
-        `${_userProfile?.displayName || _user?.email || 'A PMDeck user'} invited you to join the organization "${org.name}" as ${roleLabel}.`,
+        `${_userProfile?.displayName || _user?.email || 'A PMDeck user'} invited you to join the organization "${selectedOrg.name}" as ${roleLabel}.`,
         ``,
         `Join link: ${inviteUrl}`,
         ``,
@@ -2752,8 +2819,8 @@ async function _openOrganizationsPage() {
   document.querySelectorAll('.org-role-select').forEach((sel) => {
     sel.addEventListener('change', async () => {
       try {
-        await setOrgMemberRole(org.id, sel.dataset.uid, sel.value);
-        await _openOrganizationsPage();
+        await setOrgMemberRole(selectedOrg.id, sel.dataset.uid, sel.value);
+        await _openOrganizationsPage(selectedOrg.id);
       } catch (err) {
         errorEl.textContent = err.message || 'Could not update member role.';
         errorEl.classList.remove('hidden');
@@ -2772,8 +2839,8 @@ async function _openOrganizationsPage() {
   document.querySelectorAll('.org-remove-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        await removeMember(org.id, btn.dataset.uid);
-        await _openOrganizationsPage();
+        await removeMember(selectedOrg.id, btn.dataset.uid);
+        await _openOrganizationsPage(selectedOrg.id);
       } catch (err) {
         errorEl.textContent = err.message || 'Could not remove member.';
         errorEl.classList.remove('hidden');
@@ -2787,7 +2854,7 @@ async function _openOrganizationsPage() {
   document.getElementById('org-ai-usage-toggle')?.addEventListener('change', async (e) => {
     try {
       const allow = e.target.checked;
-      await setOrgAiUsageSetting(org.id, allow);
+      await setOrgAiUsageSetting(selectedOrg.id, allow);
       if (aiErrorEl) aiErrorEl.classList.add('hidden');
       if (aiSuccessEl) {
         aiSuccessEl.textContent = allow ? 'AI usage enabled for this organization' : 'AI usage disabled for this organization';

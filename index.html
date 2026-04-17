@@ -227,7 +227,7 @@
 
         <div class="flex items-center justify-between mb-6">
           <div class="flex items-center gap-3">
-            <h1 class="text-2xl font-semibold text-gray-800"><span class="sm:hidden">PM Decks</span><span class="hidden sm:inline">Project Management Decks</span></h1>
+            <h1 class="text-2xl font-semibold text-gray-800"><span class="sm:hidden inline-block whitespace-nowrap">Project Decks</span><span class="hidden sm:inline">Project Management Decks</span></h1>
           </div>
           <div class="flex items-center gap-2" id="boards-action-btns">
             <button id="ai-board-btn"
@@ -239,6 +239,11 @@
             <button id="ai-board-help-btn" aria-label="AI help examples"
               class="w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold
                      text-amber-700 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors">?
+            </button>
+            <button id="mobile-ai-board-btn" aria-label="Open AI Dealer" title="Open AI Dealer"
+              class="sm:hidden inline-flex items-center justify-center w-9 h-9 text-amber-900
+                     bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
+              <span class="text-base leading-none">✨</span>
             </button>
             <button id="create-board-btn"
               class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white

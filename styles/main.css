@@ -1072,6 +1072,24 @@ body.ai-mobile-chat-open {
     height: 15px;
     bottom: 4px;
   }
+
+  #boards-view main > .max-w-5xl {
+    padding-top: 0.85rem !important;
+    padding-bottom: 1.15rem !important;
+  }
+
+  #boards-view main > .max-w-5xl > .flex.items-center.justify-between.mb-6 {
+    margin-bottom: 0.65rem;
+    gap: 0.55rem;
+    align-items: center;
+  }
+
+  #boards-action-btns {
+    width: auto;
+    overflow: visible;
+    padding-left: 0.45rem;
+    gap: 0.5rem;
+  }
 }
 /* Desktop: sticky notes on the left */
 @media (min-width: 1024px) {
