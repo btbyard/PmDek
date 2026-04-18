@@ -332,6 +332,7 @@ function _applyBoardView(mode = 'kanban') {
   if (mode === 'list') renderListView();
   if (mode === 'calendar') renderCalendarView();
   if (mode === 'timeline') _renderTimelineInPage();
+  if (mode === 'kanban') requestAnimationFrame(() => refreshStickyNoteHeights());
 }
 
 function _applyOrgAiRestrictions(restricted) {
@@ -1061,6 +1062,7 @@ document.getElementById('fullscreen-focus-btn')?.addEventListener('click', () =>
       boardView?.appendChild(closeBtn);
     }
     closeBtn.style.display = 'flex';
+    requestAnimationFrame(() => refreshStickyNoteHeights());
   } else {
     // restore header and search bar
     if (header) header.style.display = '';
@@ -1069,6 +1071,7 @@ document.getElementById('fullscreen-focus-btn')?.addEventListener('click', () =>
     _syncAiChatSidebar(_activeViewName);
     const closeBtn = document.getElementById('fullscreen-exit-btn');
     if (closeBtn) closeBtn.style.display = 'none';
+    requestAnimationFrame(() => refreshStickyNoteHeights());
   }
 });
 
@@ -1859,11 +1862,13 @@ async function _openBoardActivityModal() {
   try {
     const local = _readLocalCompletionLogs(_currentBoardId).map((row) => ({
       id: row.id || '',
+      cardId: row.cardId || '',
       userId: row.userId || '',
       cardTitle: row.cardTitle || 'Untitled task',
       type: row.type || 'task',
       subtaskTitle: row.subtaskTitle || '',
       whenMs: new Date(row.completedAtIso || 0).getTime(),
+      source: 'local',
     }));
 
     const { collection, getDocs, query, where, limit } = await import('firebase/firestore');
@@ -1878,18 +1883,30 @@ async function _openBoardActivityModal() {
       const when = data.completedAt?.toDate?.() || data.updatedAt?.toDate?.() || null;
       return {
         id: d.id,
+        cardId: data.cardId || '',
         userId: data.userId || '',
         cardTitle: data.cardTitle || 'Untitled task',
         type: data.type || 'task',
         subtaskTitle: data.subtaskTitle || '',
         whenMs: when ? when.getTime() : 0,
+        source: 'remote',
       };
     });
 
     const dedupe = new Map();
     [...remote, ...local].forEach((item) => {
-      const key = `${item.id}:${item.userId}:${item.type}:${item.cardTitle}:${item.whenMs}`;
-      if (!dedupe.has(key)) dedupe.set(key, item);
+      const roundedWhenMs = item.whenMs > 0 ? Math.floor(item.whenMs / 10000) : 0;
+      const key = [
+        item.cardId || item.cardTitle,
+        item.userId,
+        item.type,
+        item.subtaskTitle,
+        roundedWhenMs,
+      ].join('::');
+      const existing = dedupe.get(key);
+      if (!existing || (existing.source === 'local' && item.source === 'remote')) {
+        dedupe.set(key, item);
+      }
     });
 
     const rows = [...dedupe.values()]

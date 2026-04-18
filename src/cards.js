@@ -57,6 +57,49 @@ function _isEffectivelyCompleted(card) {
   return Boolean(card?.completed) || _isDoneLikeColumnId(card?.columnId);
 }
 
+const PRIORITY_META = {
+  low: { label: 'Low', cardClass: 'bg-slate-500/15 text-slate-200 border-slate-400/25', listClass: 'bg-slate-100 text-slate-700' },
+  medium: { label: 'Medium', cardClass: 'bg-sky-500/15 text-sky-200 border-sky-400/25', listClass: 'bg-sky-100 text-sky-700' },
+  high: { label: 'High', cardClass: 'bg-amber-500/15 text-amber-200 border-amber-400/25', listClass: 'bg-amber-100 text-amber-700' },
+  urgent: { label: 'Urgent', cardClass: 'bg-rose-500/15 text-rose-200 border-rose-400/25', listClass: 'bg-rose-100 text-rose-700' },
+};
+
+function _normalizePriority(value) {
+  const key = String(value || '').toLowerCase();
+  return PRIORITY_META[key] ? key : 'medium';
+}
+
+function _buildPriorityBadge(priority, tone = 'card') {
+  const normalized = _normalizePriority(priority);
+  const meta = PRIORITY_META[normalized];
+  const cls = tone === 'list' ? meta.listClass : meta.cardClass;
+  return `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 ${cls}">${meta.label}</span>`;
+}
+
+function _normalizeWeekdays(weekdays) {
+  if (!Array.isArray(weekdays)) return [];
+  return [...new Set(weekdays
+    .map((day) => Number(day))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort((a, b) => a - b);
+}
+
+function _normalizeRecurrenceRule(rule = {}, fallbackFrequency = 'weekly') {
+  const frequency = String(rule?.frequency || rule?.unit || fallbackFrequency || 'weekly').toLowerCase();
+  const normalizedFrequency = ['daily', 'weekly', 'monthly', 'quarterly', 'annual'].includes(frequency)
+    ? frequency
+    : 'weekly';
+  const interval = Math.max(1, Math.min(365, Number.parseInt(rule?.interval, 10) || 1));
+  const weekdays = normalizedFrequency === 'weekly' ? _normalizeWeekdays(rule?.weekdays) : [];
+  return { frequency: normalizedFrequency, interval, weekdays };
+}
+
+function _inferWeeklyRuleWeekdays(startDate, dueDate) {
+  const seed = dueDate || startDate;
+  if (!seed) return [];
+  const parsed = new Date(`${seed}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? [] : [parsed.getDay()];
+}
+
 /**
  * Starts a real-time listener on the cards collection for the active board.
  * Fires `renderCards` every time Firestore pushes an update.
@@ -218,7 +261,10 @@ export function renderListView() {
                 <input type="checkbox" class="list-task-check mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400" data-card-id="${escapeHtml(c.id || '')}" ${c.completed ? 'checked' : ''} />
               </td>
               <td class="px-3 py-2 text-gray-800">
-                <p>${escapeHtml(c.title || '')}</p>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <p>${escapeHtml(c.title || '')}</p>
+                  ${_buildPriorityBadge(c.priority, 'list')}
+                </div>
                 ${subtaskListHtml(c, false)}
               </td>
               <td class="px-3 py-2 text-gray-500">${escapeHtml(c.columnId || '')}</td>
@@ -238,7 +284,10 @@ export function renderListView() {
                 <input type="checkbox" class="list-task-check mt-0.5 w-4 h-4 rounded border-gray-300 text-brand-500 focus:ring-brand-400" data-card-id="${escapeHtml(c.id || '')}" checked />
               </td>
               <td class="px-3 py-2 text-gray-500">
-                <p class="line-through">${escapeHtml(c.title || '')}</p>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <p class="line-through">${escapeHtml(c.title || '')}</p>
+                  ${_buildPriorityBadge(c.priority, 'list')}
+                </div>
                 ${subtaskListHtml(c, true)}
               </td>
               <td class="px-3 py-2 text-gray-400">${escapeHtml(c.columnId || '')}</td>
@@ -374,9 +423,14 @@ export function renderCalendarView() {
  * @param {number} [order=0]
  * @returns {Promise<string>} New card document ID
  */
-export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null, recurring = false, recurrenceFrequency = null, startDate = null) {
+export async function createCard(columnId, title, description = '', order = 0, checkable = false, subtasks = [], dueDate = null, attachments = [], cardColor = null, cardBgColor = null, recurring = false, recurrenceFrequency = null, startDate = null, priority = 'medium', recurrenceRule = null) {
   const boardId = getBoardId();
   let resolvedCardBgColor = cardBgColor || null;
+  const normalizedPriority = _normalizePriority(priority);
+  const normalizedRule = _normalizeRecurrenceRule(
+    recurrenceRule || { frequency: recurrenceFrequency || 'weekly', interval: 1 },
+    recurrenceFrequency || 'weekly'
+  );
 
   // If caller did not provide a task color, inherit the board-level task color.
   if (!resolvedCardBgColor) {
@@ -400,7 +454,9 @@ export async function createCard(columnId, title, description = '', order = 0, c
     startDate:   startDate || null,
     dueDate:     dueDate || null,
     recurring:   Boolean(recurring),
-    recurrenceFrequency: recurring ? (recurrenceFrequency || 'weekly') : null,
+    recurrenceFrequency: recurring ? normalizedRule.frequency : null,
+    recurrenceRule: recurring ? normalizedRule : null,
+    priority: normalizedPriority,
     attachments: attachments,
     cardColor:   cardColor || null,
     cardBgColor: resolvedCardBgColor,
@@ -421,10 +477,32 @@ export async function createCard(columnId, title, description = '', order = 0, c
  */
 export async function updateCard(cardId, updates) {
   const cardRef = doc(db, 'cards', cardId);
-  await updateDoc(cardRef, {
-    ...updates,
-    updatedAt: serverTimestamp(),
-  });
+  const previousCards = _lastCards;
+  const optimisticUpdatedAt = new Date();
+  let appliedOptimistic = false;
+
+  if (Array.isArray(_lastCards) && _lastCards.some((card) => card.id === cardId)) {
+    _lastCards = _lastCards.map((card) => (
+      card.id === cardId
+        ? { ...card, ...updates, updatedAt: optimisticUpdatedAt }
+        : card
+    ));
+    appliedOptimistic = true;
+    renderAllCards(_lastCards);
+  }
+
+  try {
+    await updateDoc(cardRef, {
+      ...updates,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    if (appliedOptimistic) {
+      _lastCards = previousCards;
+      renderAllCards(_lastCards);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -560,7 +638,8 @@ function buildCardEl(card, isDoneColumn = false) {
   const attachments = Array.isArray(card.attachments) ? card.attachments : [];
   const dueDate = card.dueDate || null;
   const recurring = Boolean(card.recurring);
-  const recurrenceFrequency = String(card.recurrenceFrequency || 'weekly');
+  const recurrenceRule = _normalizeRecurrenceRule(card.recurrenceRule || { frequency: card.recurrenceFrequency || 'weekly' }, card.recurrenceFrequency || 'weekly');
+  const priority = _normalizePriority(card.priority);
 
   el.className      = [
     'card relative rounded-lg p-2.5 pb-8 cursor-grab active:cursor-grabbing',
@@ -576,7 +655,9 @@ function buildCardEl(card, isDoneColumn = false) {
   el.dataset.checkable = String(Boolean(card.checkable));
   el.dataset.dueDate  = dueDate || '';
   el.dataset.recurring = String(recurring);
-  el.dataset.recurrenceFrequency = recurrenceFrequency;
+  el.dataset.recurrenceFrequency = recurrenceRule.frequency;
+  el.dataset.recurrenceRule = JSON.stringify(recurrenceRule);
+  el.dataset.priority = priority;
   el.dataset.attachments = JSON.stringify(attachments);
   el.dataset.cardColor = card.cardColor || '';
   el.dataset.cardBgColor = card.cardBgColor || '';
@@ -612,12 +693,14 @@ function buildCardEl(card, isDoneColumn = false) {
       </svg>${label}</span>`;
   }
 
+  const priorityBadge = _buildPriorityBadge(priority);
+
   let recurringBadge = '';
   if (recurring) {
-    recurringBadge = `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 bg-emerald-500/15 text-emerald-200 border-emerald-400/25" title="Recurring ${_formatRecurrenceFrequency(recurrenceFrequency)}">
+    recurringBadge = `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 bg-emerald-500/15 text-emerald-200 border-emerald-400/25" title="Recurring ${_formatRecurrenceFrequency(recurrenceRule)}">
       <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M20 10a8 8 0 00-14.9-4M4 14a8 8 0 0014.9 4"/>
-      </svg>${_formatRecurrenceFrequency(recurrenceFrequency)}</span>`;
+      </svg>${_formatRecurrenceFrequency(recurrenceRule)}</span>`;
   }
 
   // Attachment badge
@@ -717,7 +800,7 @@ function buildCardEl(card, isDoneColumn = false) {
     </div>
     ${card.description ? `<p class="card-desc mt-1 text-xs text-white/60 line-clamp-2">${escapeHtml(card.description)}</p>` : ''}
     ${subtasks.length ? `<div class="mt-1">${subtasksHtml}</div>` : ''}
-    ${(dueDateHtml || recurringBadge || attachBadge) ? `<div class="flex items-center gap-1.5 flex-wrap mt-1.5">${dueDateHtml}${recurringBadge}${attachBadge}</div>` : ''}
+    <div class="flex items-center gap-1.5 flex-wrap mt-1.5">${priorityBadge}${dueDateHtml}${recurringBadge}${attachBadge}</div>
     ${_buildAssigneeChips(card.assignees)}
     <button class="move-card-prev-btn" data-card-id="${card.id}" title="Move to previous column">
       <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -777,7 +860,11 @@ export function initCardEvents(user) {
   const searchInput = document.getElementById('board-search-input');
   if (searchInput) {
     searchInput.value = '';
-    searchInput.addEventListener('input', () => filterCards(searchInput.value));
+    if (_searchInputHandler) {
+      searchInput.removeEventListener('input', _searchInputHandler);
+    }
+    _searchInputHandler = () => filterCards(searchInput.value);
+    searchInput.addEventListener('input', _searchInputHandler);
   }
 
   // Chip filter buttons
@@ -792,7 +879,9 @@ export function initCardEvents(user) {
   CHIP_IDS.forEach(({ id, key, activeClass }) => {
     const btn = document.getElementById(id);
     if (!btn) return;
-    btn.addEventListener('click', () => {
+    const prevHandler = _chipHandlers.get(id);
+    if (prevHandler) btn.removeEventListener('click', prevHandler);
+    const nextHandler = () => {
       if (_filterChips.has(key)) {
         _filterChips.delete(key);
         btn.className = btn.className.replace(activeClass, INACTIVE);
@@ -801,32 +890,48 @@ export function initCardEvents(user) {
         btn.className = btn.className.replace(INACTIVE, activeClass);
       }
       renderAllCards(_lastCards);
-    });
+    };
+    _chipHandlers.set(id, nextHandler);
+    btn.addEventListener('click', nextHandler);
   });
 
-  document.getElementById('filter-clear-btn')?.addEventListener('click', () => {
-    _filterQuery = '';
-    _filterChips = new Set();
-    if (searchInput) searchInput.value = '';
-    CHIP_IDS.forEach(({ id, key, activeClass }) => {
-      const btn = document.getElementById(id);
-      if (btn) btn.className = btn.className.replace(activeClass, INACTIVE);
-    });
-    renderAllCards(_lastCards);
-  });
+  const clearBtn = document.getElementById('filter-clear-btn');
+  if (clearBtn) {
+    if (_clearFilterHandler) {
+      clearBtn.removeEventListener('click', _clearFilterHandler);
+    }
+    _clearFilterHandler = () => {
+      _filterQuery = '';
+      _filterChips = new Set();
+      if (searchInput) searchInput.value = '';
+      CHIP_IDS.forEach(({ id, key, activeClass }) => {
+        const btn = document.getElementById(id);
+        if (btn) btn.className = btn.className.replace(activeClass, INACTIVE);
+      });
+      renderAllCards(_lastCards);
+    };
+    clearBtn.addEventListener('click', _clearFilterHandler);
+  }
 
   const board = document.getElementById('board-root');
+  if (!board) return;
 
   // Close any open mobile action menus when clicking outside them
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('.card-actions-mobile-menu') && !e.target.closest('.card-actions-mobile-toggle')) {
-      document.querySelectorAll('.card-actions-mobile-menu').forEach((m) => m.classList.add('hidden'));
-    }
-    if (!e.target.closest('.col-quick-color-wrap') && !e.target.closest('.col-quick-bg-wrap')) {
-      document.querySelectorAll('.col-quick-color-popup').forEach((p) => p.classList.add('hidden'));
-      document.querySelectorAll('.col-quick-bg-popup').forEach((p) => p.classList.add('hidden'));
-    }
-  });
+  if (!_documentClickBound) {
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.card-actions-mobile-menu') && !e.target.closest('.card-actions-mobile-toggle')) {
+        document.querySelectorAll('.card-actions-mobile-menu').forEach((m) => m.classList.add('hidden'));
+      }
+      if (!e.target.closest('.col-quick-color-wrap') && !e.target.closest('.col-quick-bg-wrap')) {
+        document.querySelectorAll('.col-quick-color-popup').forEach((p) => p.classList.add('hidden'));
+        document.querySelectorAll('.col-quick-bg-popup').forEach((p) => p.classList.add('hidden'));
+      }
+    });
+    _documentClickBound = true;
+  }
+
+  if (board.dataset.eventsBound) return;
+  board.dataset.eventsBound = '1';
 
   board.addEventListener('click', async (e) => {
     // ── Toggle task complete ─────────────────────────────────────────────
@@ -975,11 +1080,15 @@ export function initCardEvents(user) {
       let attachments = [];
       let recurring = false;
       let recurrenceFrequency = 'weekly';
+      let recurrenceRule = { frequency: 'weekly', interval: 1, weekdays: [] };
+      let priority = 'medium';
       try { checkable = JSON.parse(cardEl.dataset.checkable ?? 'false'); } catch (_) {}
       subtasks = _readSubtasksFromCardEl(cardEl);
       try { attachments = JSON.parse(cardEl.dataset.attachments || '[]'); } catch (_) {}
       try { recurring = JSON.parse(cardEl.dataset.recurring ?? 'false'); } catch (_) {}
       recurrenceFrequency = cardEl.dataset.recurrenceFrequency || 'weekly';
+      try { recurrenceRule = _normalizeRecurrenceRule(JSON.parse(cardEl.dataset.recurrenceRule || '{}'), recurrenceFrequency); } catch (_) { recurrenceRule = _normalizeRecurrenceRule({ frequency: recurrenceFrequency }, recurrenceFrequency); }
+      priority = _normalizePriority(cardEl.dataset.priority || 'medium');
       const fullCard = _lastCards.find((c) => c.id === editBtn.dataset.cardId) || {};
       openCardModal({
         cardId:      editBtn.dataset.cardId,
@@ -991,6 +1100,8 @@ export function initCardEvents(user) {
         dueDate:     cardEl.dataset.dueDate || null,
         recurring,
         recurrenceFrequency,
+        recurrenceRule: fullCard.recurrenceRule || recurrenceRule,
+        priority: fullCard.priority || priority,
         attachments,
         comments:    Array.isArray(fullCard.comments) ? fullCard.comments : [],
         assignees:   Array.isArray(fullCard.assignees) ? fullCard.assignees : [],
@@ -1047,11 +1158,15 @@ export function initCardEvents(user) {
       let attachments = [];
       let recurring = false;
       let recurrenceFrequency = 'weekly';
+      let recurrenceRule = { frequency: 'weekly', interval: 1, weekdays: [] };
+      let priority = 'medium';
       try { checkable = JSON.parse(cardEl.dataset.checkable ?? 'false'); } catch (_) {}
       subtasks = _readSubtasksFromCardEl(cardEl);
       try { attachments = JSON.parse(cardEl.dataset.attachments || '[]'); } catch (_) {}
       try { recurring = JSON.parse(cardEl.dataset.recurring ?? 'false'); } catch (_) {}
       recurrenceFrequency = cardEl.dataset.recurrenceFrequency || 'weekly';
+      try { recurrenceRule = _normalizeRecurrenceRule(JSON.parse(cardEl.dataset.recurrenceRule || '{}'), recurrenceFrequency); } catch (_) { recurrenceRule = _normalizeRecurrenceRule({ frequency: recurrenceFrequency }, recurrenceFrequency); }
+      priority = _normalizePriority(cardEl.dataset.priority || 'medium');
       const fullCard = _lastCards.find((c) => c.id === editBtnMobile.dataset.cardId) || {};
       openCardModal({
         cardId:      editBtnMobile.dataset.cardId,
@@ -1063,6 +1178,8 @@ export function initCardEvents(user) {
         dueDate:     cardEl.dataset.dueDate || null,
         recurring,
         recurrenceFrequency,
+        recurrenceRule: fullCard.recurrenceRule || recurrenceRule,
+        priority: fullCard.priority || priority,
         attachments,
         comments:    Array.isArray(fullCard.comments) ? fullCard.comments : [],
         assignees:   Array.isArray(fullCard.assignees) ? fullCard.assignees : [],
@@ -1117,6 +1234,10 @@ async function _applyTaskCompletionToggle(cardId, isCompleted, cardEl = null, fa
 
   // Recurring automation: clone card into first column with next due date
   if (cardEl?.dataset?.recurring === 'true') {
+    const now = Date.now();
+    const lastCloneAt = Number(_recentRecurringCloneByCard.get(cardId) || 0);
+    if (now - lastCloneAt < 2000) return;
+    _recentRecurringCloneByCard.set(cardId, now);
     _handleRecurringComplete(cardId, cardEl).catch((err) =>
       console.warn('Recurring clone failed:', err)
     );
@@ -1431,7 +1552,7 @@ async function _uploadAttachments(files, userId) {
  *
  * @param {{ columnId?: string, cardId?: string, title?: string, description?: string }} opts
  */
-function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], startDate = null, dueDate = null, recurring = false, recurrenceFrequency = 'weekly', attachments = [], comments = [], assignees = [] }) {
+function openCardModal({ columnId, cardId, title = '', description = '', checkable = false, subtasks = [], startDate = null, dueDate = null, recurring = false, recurrenceFrequency = 'weekly', recurrenceRule = null, priority = 'medium', attachments = [], comments = [], assignees = [] }) {
   const modalRoot = document.getElementById('modal-root');
   const isEdit    = Boolean(cardId);
 
@@ -1781,6 +1902,21 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     }
   };
 
+  const normalizedRecurrenceRule = _normalizeRecurrenceRule(
+    recurrenceRule || { frequency: recurrenceFrequency || 'weekly', interval: 1, weekdays: _inferWeeklyRuleWeekdays(startDate, dueDate) },
+    recurrenceFrequency || 'weekly'
+  );
+  const normalizedPriority = _normalizePriority(priority);
+  const weekdayOptions = [
+    { value: 1, label: 'Mon' },
+    { value: 2, label: 'Tue' },
+    { value: 3, label: 'Wed' },
+    { value: 4, label: 'Thu' },
+    { value: 5, label: 'Fri' },
+    { value: 6, label: 'Sat' },
+    { value: 0, label: 'Sun' },
+  ];
+
   const _bindCommentEvents = () => {
     const submitBtn = document.getElementById('modal-comment-submit');
     submitBtn?.addEventListener('click', async () => {
@@ -1860,6 +1996,16 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
             />
           </div>
           <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1" for="card-priority">Priority</label>
+            <select id="card-priority"
+              class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+              <option value="low" ${normalizedPriority === 'low' ? 'selected' : ''}>Low</option>
+              <option value="medium" ${normalizedPriority === 'medium' ? 'selected' : ''}>Medium</option>
+              <option value="high" ${normalizedPriority === 'high' ? 'selected' : ''}>High</option>
+              <option value="urgent" ${normalizedPriority === 'urgent' ? 'selected' : ''}>Urgent</option>
+            </select>
+          </div>
+          <div>
             <label class="flex items-center gap-2.5 cursor-pointer select-none">
               <input
                 id="card-recurring"
@@ -1870,15 +2016,42 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
               <span class="text-sm text-gray-600">Recurring</span>
             </label>
             <div id="card-recurrence-wrap" class="mt-2 ${recurring ? '' : 'hidden'}">
-              <label class="block text-sm font-medium text-gray-700 mb-1" for="card-recurrence-frequency">Frequency</label>
-              <select id="card-recurrence-frequency"
-                class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
-                <option value="daily" ${recurrenceFrequency === 'daily' ? 'selected' : ''}>Daily</option>
-                <option value="weekly" ${recurrenceFrequency === 'weekly' ? 'selected' : ''}>Weekly</option>
-                <option value="monthly" ${recurrenceFrequency === 'monthly' ? 'selected' : ''}>Monthly</option>
-                <option value="quarterly" ${recurrenceFrequency === 'quarterly' ? 'selected' : ''}>Quarterly</option>
-                <option value="annual" ${recurrenceFrequency === 'annual' ? 'selected' : ''}>Annual</option>
-              </select>
+              <div class="grid grid-cols-1 sm:grid-cols-[minmax(0,120px)_minmax(0,1fr)] gap-3">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1" for="card-recurrence-interval">Every</label>
+                  <input id="card-recurrence-interval" type="number" min="1" max="365"
+                    class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500"
+                    value="${normalizedRecurrenceRule.interval}" />
+                </div>
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1" for="card-recurrence-frequency">Unit</label>
+                  <select id="card-recurrence-frequency"
+                    class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500">
+                    <option value="daily" ${normalizedRecurrenceRule.frequency === 'daily' ? 'selected' : ''}>Day(s)</option>
+                    <option value="weekly" ${normalizedRecurrenceRule.frequency === 'weekly' ? 'selected' : ''}>Week(s)</option>
+                    <option value="monthly" ${normalizedRecurrenceRule.frequency === 'monthly' ? 'selected' : ''}>Month(s)</option>
+                    <option value="quarterly" ${normalizedRecurrenceRule.frequency === 'quarterly' ? 'selected' : ''}>Quarter(s)</option>
+                    <option value="annual" ${normalizedRecurrenceRule.frequency === 'annual' ? 'selected' : ''}>Year(s)</option>
+                  </select>
+                </div>
+              </div>
+              <div id="card-recurrence-weekdays-wrap" class="mt-3 ${normalizedRecurrenceRule.frequency === 'weekly' ? '' : 'hidden'}">
+                <p class="text-sm font-medium text-gray-700 mb-1">Repeat on</p>
+                <div class="flex flex-wrap gap-2">
+                  ${weekdayOptions.map((day) => `
+                    <label class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border border-gray-200 text-xs text-gray-600 bg-white">
+                      <input
+                        type="checkbox"
+                        class="card-recurrence-weekday rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+                        value="${day.value}"
+                        ${normalizedRecurrenceRule.weekdays.includes(day.value) ? 'checked' : ''}
+                      />
+                      <span>${day.label}</span>
+                    </label>
+                  `).join('')}
+                </div>
+                <p class="text-[11px] text-gray-400 mt-1">Leave all days unchecked to repeat from the completion date.</p>
+              </div>
             </div>
           </div>
           <label class="flex items-center gap-2.5 cursor-pointer select-none">
@@ -1920,13 +2093,18 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   const recurringCheckbox = document.getElementById('card-recurring');
   const recurrenceWrap = document.getElementById('card-recurrence-wrap');
   const recurrenceSelect = document.getElementById('card-recurrence-frequency');
+  const recurrenceWeekdaysWrap = document.getElementById('card-recurrence-weekdays-wrap');
   const _toggleRecurrenceVisibility = () => {
     if (!recurrenceWrap) return;
     const checked = Boolean(recurringCheckbox?.checked);
     recurrenceWrap.classList.toggle('hidden', !checked);
     if (checked && recurrenceSelect && !recurrenceSelect.value) recurrenceSelect.value = 'weekly';
+    if (recurrenceWeekdaysWrap) {
+      recurrenceWeekdaysWrap.classList.toggle('hidden', !checked || recurrenceSelect?.value !== 'weekly');
+    }
   };
   recurringCheckbox?.addEventListener('change', _toggleRecurrenceVisibility);
+  recurrenceSelect?.addEventListener('change', _toggleRecurrenceVisibility);
   _toggleRecurrenceVisibility();
 
   // Close on backdrop click or cancel button
@@ -1944,9 +2122,19 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
     const newCheckable = document.getElementById('card-checkable').checked;
     const newStartDate = document.getElementById('card-start-date').value || null;
     const newDueDate   = document.getElementById('card-due-date').value || null;
+    const newPriority  = _normalizePriority(document.getElementById('card-priority')?.value || 'medium');
     const newRecurring = Boolean(document.getElementById('card-recurring')?.checked);
-    const newRecurrenceFrequency = newRecurring
-      ? (document.getElementById('card-recurrence-frequency')?.value || 'weekly')
+    const newRecurrenceFrequency = document.getElementById('card-recurrence-frequency')?.value || 'weekly';
+    const newRecurrenceInterval = Math.max(1, Math.min(365, Number.parseInt(document.getElementById('card-recurrence-interval')?.value || '1', 10) || 1));
+    const newRecurrenceWeekdays = [...document.querySelectorAll('.card-recurrence-weekday:checked')]
+      .map((chk) => Number(chk.value))
+      .filter((day) => Number.isInteger(day));
+    const newRecurrenceRule = newRecurring
+      ? _normalizeRecurrenceRule({
+        frequency: newRecurrenceFrequency,
+        interval: newRecurrenceInterval,
+        weekdays: newRecurrenceWeekdays,
+      }, newRecurrenceFrequency)
       : null;
     if (!newTitle) return;
 
@@ -1967,14 +2155,16 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
         await updateCard(cardId, {
           title: newTitle, description: newDesc, checkable: newCheckable,
           subtasks: finalSubtasks, startDate: newStartDate, dueDate: newDueDate, attachments: finalAttachments,
+          priority: newPriority,
           recurring: newRecurring,
-          recurrenceFrequency: newRecurrenceFrequency,
-            assignees: [...editAssignees],
+          recurrenceFrequency: newRecurring ? newRecurrenceRule.frequency : null,
+          recurrenceRule: newRecurrenceRule,
+          assignees: [...editAssignees],
         });
       } else {
         const listEl    = document.querySelector(`.card-list[data-column-id="${columnId}"]`);
         const lastOrder = listEl?.children.length ?? 0;
-        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, null, null, newRecurring, newRecurrenceFrequency, newStartDate);
+        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, null, null, newRecurring, newRecurrenceRule?.frequency || null, newStartDate, newPriority, newRecurrenceRule);
       }
       close();
     } catch (err) {
@@ -1988,6 +2178,11 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
 
 let _currentUid = null;
 let _currentUserDisplayName = '';
+let _documentClickBound = false;
+const _recentRecurringCloneByCard = new Map();
+let _searchInputHandler = null;
+let _clearFilterHandler = null;
+const _chipHandlers = new Map();
 
 /** Returns the current uid for use in createCard. Exposed as a closure. */
 function auth_uid() {
@@ -2050,14 +2245,29 @@ export function getBoardAssignedMembers() {
 }
 
 function _formatRecurrenceFrequency(value) {
-  const map = {
-    daily: 'Daily',
-    weekly: 'Weekly',
-    monthly: 'Monthly',
-    quarterly: 'Quarterly',
-    annual: 'Annual',
-  };
-  return map[String(value || '').toLowerCase()] || 'Weekly';
+  const rule = typeof value === 'string'
+    ? _normalizeRecurrenceRule({ frequency: value }, value)
+    : _normalizeRecurrenceRule(value || {});
+  const singularUnit = {
+    daily: 'day',
+    weekly: 'week',
+    monthly: 'month',
+    quarterly: 'quarter',
+    annual: 'year',
+  }[rule.frequency] || 'week';
+  const pluralUnit = {
+    daily: 'days',
+    weekly: 'weeks',
+    monthly: 'months',
+    quarterly: 'quarters',
+    annual: 'years',
+  }[rule.frequency] || 'weeks';
+  let label = rule.interval === 1 ? `Every ${singularUnit}` : `Every ${rule.interval} ${pluralUnit}`;
+  if (rule.frequency === 'weekly' && rule.weekdays.length) {
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    label += ` on ${rule.weekdays.map((day) => dayNames[day]).join(', ')}`;
+  }
+  return label;
 }
 
 // ─── Delete card modal ────────────────────────────────────────────────────────
@@ -2123,9 +2333,13 @@ async function _handleRecurringComplete(cardId, cardEl) {
 
   const title = cardEl.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
   const desc = cardEl.querySelector('.card-desc')?.textContent?.trim() || '';
-  const freq = cardEl.dataset.recurrenceFrequency || 'weekly';
+  const recurrenceRule = _normalizeRecurrenceRule(
+    JSON.parse(cardEl.dataset.recurrenceRule || '{}'),
+    cardEl.dataset.recurrenceFrequency || 'weekly'
+  );
   const currentDue = cardEl.dataset.dueDate || null;
-  const nextDue = _computeNextDueDate(currentDue, freq);
+  const nextDue = _computeNextDueDate(currentDue, recurrenceRule);
+  const priority = _normalizePriority(cardEl.dataset.priority || 'medium');
 
   let subtasks = [];
   try { subtasks = JSON.parse(cardEl.dataset.subtasks || '[]'); } catch (_) {}
@@ -2136,18 +2350,47 @@ async function _handleRecurringComplete(cardId, cardEl) {
   }));
 
   const lastOrder = firstCol.querySelectorAll('.card').length;
-  await createCard(firstColumnId, title, desc, lastOrder, Boolean(cardEl.dataset.checkable === 'true'), freshSubtasks, nextDue, [], null, null, true, freq);
+  await createCard(firstColumnId, title, desc, lastOrder, Boolean(cardEl.dataset.checkable === 'true'), freshSubtasks, nextDue, [], null, null, true, recurrenceRule.frequency, null, priority, recurrenceRule);
 }
 
-function _computeNextDueDate(currentDue, frequency) {
+function _computeNextDueDate(currentDue, recurrenceRule) {
+  const rule = _normalizeRecurrenceRule(
+    typeof recurrenceRule === 'string' ? { frequency: recurrenceRule } : recurrenceRule,
+    typeof recurrenceRule === 'string' ? recurrenceRule : recurrenceRule?.frequency || 'weekly'
+  );
   const base = currentDue ? new Date(currentDue + 'T00:00:00') : new Date();
-  switch (frequency) {
-    case 'daily':     base.setDate(base.getDate() + 1); break;
-    case 'weekly':    base.setDate(base.getDate() + 7); break;
-    case 'monthly':   base.setMonth(base.getMonth() + 1); break;
-    case 'quarterly': base.setMonth(base.getMonth() + 3); break;
-    case 'annual':    base.setFullYear(base.getFullYear() + 1); break;
-    default:          base.setDate(base.getDate() + 7);
+  switch (rule.frequency) {
+    case 'daily':
+      base.setDate(base.getDate() + rule.interval);
+      break;
+    case 'weekly': {
+      const weekdays = rule.weekdays;
+      if (weekdays.length) {
+        const currentDay = base.getDay();
+        const nextDay = weekdays.find((day) => day > currentDay);
+        if (typeof nextDay === 'number') {
+          base.setDate(base.getDate() + (nextDay - currentDay));
+        } else {
+          const firstDay = weekdays[0];
+          const daysUntilNextWeekday = ((firstDay - currentDay + 7) % 7) || 7;
+          base.setDate(base.getDate() + daysUntilNextWeekday + ((rule.interval - 1) * 7));
+        }
+      } else {
+        base.setDate(base.getDate() + (7 * rule.interval));
+      }
+      break;
+    }
+    case 'monthly':
+      base.setMonth(base.getMonth() + rule.interval);
+      break;
+    case 'quarterly':
+      base.setMonth(base.getMonth() + (3 * rule.interval));
+      break;
+    case 'annual':
+      base.setFullYear(base.getFullYear() + rule.interval);
+      break;
+    default:
+      base.setDate(base.getDate() + 7);
   }
   return base.toISOString().split('T')[0];
 }
@@ -2163,10 +2406,13 @@ async function _cloneCard(cardId, cardEl) {
   let subtasks = [], attachments = [];
   let recurring = false;
   let recurrenceFrequency = 'weekly';
+  let recurrenceRule = { frequency: 'weekly', interval: 1, weekdays: [] };
+  const priority = _normalizePriority(cardEl.dataset.priority || 'medium');
   try { subtasks = JSON.parse(cardEl.dataset.subtasks || '[]'); } catch (_) {}
   try { attachments = JSON.parse(cardEl.dataset.attachments || '[]'); } catch (_) {}
   try { recurring = JSON.parse(cardEl.dataset.recurring || 'false'); } catch (_) {}
   recurrenceFrequency = cardEl.dataset.recurrenceFrequency || 'weekly';
+  try { recurrenceRule = _normalizeRecurrenceRule(JSON.parse(cardEl.dataset.recurrenceRule || '{}'), recurrenceFrequency); } catch (_) { recurrenceRule = _normalizeRecurrenceRule({ frequency: recurrenceFrequency }, recurrenceFrequency); }
 
   const freshSubtasks = subtasks.map((s) => ({
     ...s,
@@ -2181,7 +2427,7 @@ async function _cloneCard(cardId, cardEl) {
     columnId, `${title} (copy)`, desc, lastOrder,
     Boolean(cardEl.dataset.checkable === 'true'),
     freshSubtasks, cardEl.dataset.dueDate || null,
-    attachments, null, null, recurring, recurrenceFrequency,
+    attachments, null, null, recurring, recurrenceRule.frequency, null, priority, recurrenceRule,
   );
 }
 

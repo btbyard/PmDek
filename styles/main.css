@@ -905,10 +905,8 @@ html.pm-dark #ai-chat-input::placeholder {
   display: none !important;
 }
 
-@media (min-width: 768px) {
-  #ai-chat-sidebar {
-    display: flex !important;
-  }
+#ai-chat-sidebar.ai-chat-docked {
+  display: flex !important;
 }
 
 /* Mobile AI chat modal styling */

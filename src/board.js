@@ -776,6 +776,18 @@ export function refreshStickyNoteHeights() {
     ta.style.height = 'auto';
     ta.style.height = `${ta.scrollHeight}px`;
   });
+
+  const desktopNotesLane = document.getElementById('sticky-notes-lane-desktop');
+  const mobileContent = document.getElementById('mobile-notes-content');
+  const notesWrap = desktopNotesLane?.querySelector('.mt-2');
+  if (mobileContent) {
+    mobileContent.innerHTML = '';
+    if (notesWrap) {
+      const clonedNotes = notesWrap.cloneNode(true);
+      clonedNotes.className = 'px-4 py-3 mt-0';
+      mobileContent.appendChild(clonedNotes);
+    }
+  }
 }
 
 /** Deterministic color from a UID — matches the palette in cards.js. */
