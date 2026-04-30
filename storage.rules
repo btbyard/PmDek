@@ -1,16 +1,61 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // Card attachments — only the owning user can read/write their attachments
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOrgMember(orgId) {
+      return orgId != null
+        && firestore.exists(/databases/(default)/documents/organizations/$(orgId))
+        && request.auth.uid in firestore.get(/databases/(default)/documents/organizations/$(orgId)).data.members;
+    }
+
+    function canReadBoard(boardId) {
+      return boardId != null
+        && firestore.exists(/databases/(default)/documents/boards/$(boardId))
+        && (
+          firestore.get(/databases/(default)/documents/boards/$(boardId)).data.userId == request.auth.uid
+          || (
+            firestore.get(/databases/(default)/documents/boards/$(boardId)).data.visibility == 'org'
+            && isOrgMember(firestore.get(/databases/(default)/documents/boards/$(boardId)).data.orgId)
+          )
+        );
+    }
+
+    function canWriteBoard(boardId) {
+      return boardId != null
+        && firestore.exists(/databases/(default)/documents/boards/$(boardId))
+        && (
+          firestore.get(/databases/(default)/documents/boards/$(boardId)).data.userId == request.auth.uid
+          || (
+            firestore.get(/databases/(default)/documents/boards/$(boardId)).data.visibility == 'org'
+            && firestore.exists(/databases/(default)/documents/organizations/$(firestore.get(/databases/(default)/documents/boards/$(boardId)).data.orgId))
+            && (
+              firestore.get(/databases/(default)/documents/organizations/$(firestore.get(/databases/(default)/documents/boards/$(boardId)).data.orgId)).data.memberRoles[request.auth.uid] in ['owner', 'admin', 'collaborator']
+              || request.auth.uid in firestore.get(/databases/(default)/documents/organizations/$(firestore.get(/databases/(default)/documents/boards/$(boardId)).data.orgId)).data.admins
+            )
+          )
+        );
+    }
+
+    // Card attachments scoped by board.
+    // Path: attachments/{boardId}/{uploaderUid}/{filename}
+    match /attachments/{boardId}/{uploaderUid}/{allPaths=**} {
+      allow read: if signedIn() && canReadBoard(boardId);
+      allow write: if signedIn() && request.auth.uid == uploaderUid && canWriteBoard(boardId);
+    }
+
+    // Legacy attachment path kept for backward compatibility.
     match /attachments/{userId}/{allPaths=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if signedIn() && request.auth.uid == userId;
     }
 
     // Profile photos — owners can upload/manage their own photos.
     // Authenticated users can read so avatars can be shown in shared/org views.
     match /profile-photos/{userId}/{allPaths=**} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == userId;
     }
   }
 }

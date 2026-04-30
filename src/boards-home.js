@@ -172,7 +172,8 @@ export async function openCreateBoardModal(user, onCreated) {
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
                 </svg>
               </button>
-              <select id="board-project-type-input" class="hidden" ${projectTypeOptionsHtml}>
+              <select id="board-project-type-input" class="hidden">
+                ${projectTypeOptionsHtml}
               </select>
               <div id="project-type-options" class="hidden absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-64 overflow-y-auto">
                 ${PROJECT_TYPES.map((opt) => {
@@ -266,8 +267,11 @@ export async function openCreateBoardModal(user, onCreated) {
   const projectTypeBtn = document.getElementById('board-project-type-btn');
   const projectTypeOptions = document.getElementById('project-type-options');
   const projectTypeDisplay = document.getElementById('project-type-display');
-  const projectTypeInput = document.getElementById('board-project-type-input');
   const projectTypeSelect = document.getElementById('board-project-type-input');
+
+  // Keep hidden input and visible label in sync from the start.
+  if (projectTypeSelect) projectTypeSelect.value = 'standard';
+  if (projectTypeDisplay) projectTypeDisplay.textContent = 'Standard';
 
   projectTypeBtn.addEventListener('click', (e) => {
     e.preventDefault();

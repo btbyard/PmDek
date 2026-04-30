@@ -13,21 +13,16 @@
 import {
   collection,
   doc,
-  addDoc,
   getDoc,
   getDocs,
   query,
   updateDoc,
   where,
-  arrayUnion,
-  arrayRemove,
-  deleteField,
-  serverTimestamp,
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 
-import { db }                          from './firebase.js';
-import { getUserByUsername, getUserProfile } from './users.js';
-import { getPlanConfig }               from './billing.js';
+import { db, functions }               from './firebase.js';
+import { getUserProfile } from './users.js';
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
@@ -42,50 +37,13 @@ import { getPlanConfig }               from './billing.js';
  * @throws {Error} if user has reached org limit for their plan
  */
 export async function createOrg(uid, name) {
-  // Check org count limit based on plan
-  const userSnap = await getDoc(doc(db, 'users', uid));
-  const userData = userSnap.exists() ? (userSnap.data() || {}) : {};
-  const userPlan = getPlanConfig(userData.billingPlan || 'free');
-  const orgLimit = userPlan.orgLimitCount || 0;
-  
-  if (orgLimit <= 0) {
-    throw new Error(`Your ${userPlan.label} plan does not allow creating organizations.`);
+  const createOrgFn = httpsCallable(functions, 'createOrganization');
+  const result = await createOrgFn({ name: name.trim() });
+  const orgId = result?.data?.orgId;
+  if (!orgId || typeof orgId !== 'string') {
+    throw new Error('Organization create failed: missing organization ID from server.');
   }
-  
-  const ownedOrgIds = Array.isArray(userData.ownedOrgIds) ? userData.ownedOrgIds : [];
-  if (ownedOrgIds.length >= orgLimit) {
-    throw new Error(`Your ${userPlan.label} plan allows up to ${orgLimit} organization${orgLimit === 1 ? '' : 's'}. You have reached the limit.`);
-  }
-  
-  let orgRef;
-  try {
-    orgRef = await addDoc(collection(db, 'organizations'), {
-      name:      name.trim(),
-      ownerId:   uid,
-      members:   [uid],
-      admins:    [uid],
-      memberRoles: {
-        [uid]: 'owner',
-      },
-      allowAiUsage: true,
-      createdAt: serverTimestamp(),
-    });
-  } catch (err) {
-    throw new Error(`Organization document create failed: ${err?.message || 'permission denied'}`);
-  }
-  
-  // Update user doc with new org in ownedOrgIds array
-  ownedOrgIds.push(orgRef.id);
-  try {
-    await updateDoc(doc(db, 'users', uid), {
-      ownedOrgIds: ownedOrgIds,
-      organizationId: orgRef.id,
-    });
-  } catch (err) {
-    throw new Error(`User profile update after org create failed: ${err?.message || 'permission denied'}`);
-  }
-  
-  return orgRef.id;
+  return orgId;
 }
 
 /**
@@ -130,60 +88,30 @@ export async function getOrgMembers(orgId) {
 // ─── Membership ───────────────────────────────────────────────────────────────
 
 /**
- * Finds a user by username and adds them to the organization.
- * Throws if the username does not exist or the user is already in a different org.
+ * Finds a user by username and adds them to the organization via a server-side callable.
+ * Throws if the username does not exist, user is already in another org, or seat limit is reached.
  *
  * @param {string} orgId         Org to add the user to
  * @param {string} username      Username of the user to invite
- * @param {string} inviterOrgId  OrgId of the inviting owner (for conflict check)
  * @returns {Promise<object>}    Resolved user profile
  */
-export async function addMemberByUsername(orgId, username, inviterOrgId) {
-  const org = await getOrgById(orgId);
-  if (!org) throw new Error('Organization not found.');
-
-  const user = await getUserByUsername(username);
-  if (!user) throw new Error(`No user found with username "@${username}".`);
-  if (user.organizationId && user.organizationId !== inviterOrgId) {
-    throw new Error(`@${username} is already a member of another organization.`);
-  }
-
-  const ownerProfile = org.ownerId ? await getUserProfile(org.ownerId) : null;
-  const ownerPlan = getPlanConfig(ownerProfile?.billingPlan || 'free');
-  const seatLimit = Number(ownerPlan.orgSeatLimit || 0);
-  const currentMembers = Array.isArray(org.members) ? org.members : [];
-
-  if (seatLimit > 0 && currentMembers.length >= seatLimit) {
-    throw new Error(`${ownerPlan.label} allows up to ${seatLimit} users per organization.`);
-  }
-
-  await updateDoc(doc(db, 'organizations', orgId), {
-    members: arrayUnion(user.uid),
-    [`memberRoles.${user.uid}`]: 'collaborator',
-  });
-  await updateDoc(doc(db, 'users', user.uid), {
-    organizationId: orgId,
-  });
-  return user;
+export async function addMemberByUsername(orgId, username) {
+  const fn = httpsCallable(functions, 'addOrgMember');
+  const result = await fn({ orgId, username: username.toLowerCase() });
+  return result.data;
 }
 
 /**
- * Removes a member from the organization and clears their organizationId.
- * The owner cannot be removed via this function (caller should check first).
+ * Removes a member from the organization via a server-side callable.
+ * The owner cannot be removed via this function.
  *
  * @param {string} orgId
  * @param {string} uid
  * @returns {Promise<void>}
  */
 export async function removeMember(orgId, uid) {
-  await updateDoc(doc(db, 'organizations', orgId), {
-    members: arrayRemove(uid),
-    admins: arrayRemove(uid),
-    [`memberRoles.${uid}`]: deleteField(),
-  });
-  await updateDoc(doc(db, 'users', uid), {
-    organizationId: null,
-  });
+  const fn = httpsCallable(functions, 'removeOrgMember');
+  await fn({ orgId, targetUid: uid });
 }
 
 // ─── Organization admins ──────────────────────────────────────────────────────
@@ -199,37 +127,28 @@ export async function setOrgMemberAdminStatus(orgId, uid, isAdmin) {
 }
 
 /**
- * Sets the org role for a member and keeps admins[] aligned for rule checks.
+ * Sets the org role for a member via a server-side callable.
  * Supported roles: 'admin' | 'collaborator' | 'read-only'
  * @param {string} orgId
  * @param {string} uid
  * @param {string} role
  */
 export async function setOrgMemberRole(orgId, uid, role) {
-  const org = await getOrgById(orgId);
-  if (!org) throw new Error('Organization not found.');
-  if (!Array.isArray(org.members) || !org.members.includes(uid)) {
-    throw new Error('User must be an organization member before role assignment.');
-  }
+  const fn = httpsCallable(functions, 'setOrgMemberRole');
+  await fn({ orgId, targetUid: uid, role });
+}
 
-  const normalizedRole = String(role || '').toLowerCase();
-  if (!['admin', 'collaborator', 'read-only'].includes(normalizedRole)) {
-    throw new Error('Invalid role. Must be admin, collaborator, or read-only.');
-  }
-
-  if (org.ownerId === uid) {
-    throw new Error('Owner role cannot be changed.');
-  }
-
-  const admins = Array.isArray(org.admins) ? org.admins : [];
-  const updatedAdmins = normalizedRole === 'admin'
-    ? [...new Set([...admins, uid])]
-    : admins.filter((id) => id !== uid);
-
-  await updateDoc(doc(db, 'organizations', orgId), {
-    admins: updatedAdmins,
-    [`memberRoles.${uid}`]: normalizedRole,
-  });
+/**
+ * Transfers organization ownership to another existing member.
+ * Only current owner can perform this action.
+ *
+ * @param {string} orgId
+ * @param {string} newOwnerUid
+ * @returns {Promise<void>}
+ */
+export async function transferOrgOwnership(orgId, newOwnerUid) {
+  const fn = httpsCallable(functions, 'transferOrgOwnership');
+  await fn({ orgId, newOwnerUid });
 }
 
 /**
@@ -270,4 +189,35 @@ export async function isOrgAiUsageAllowed(orgId) {
   const org = await getOrgById(orgId);
   if (!org) return false;
   return org.allowAiUsage !== false; // Default to true if not set
+}
+
+// ─── Invite flow ──────────────────────────────────────────────────────────────
+
+/**
+ * Creates a server-side invite token for the given email and role.
+ * Returns { inviteId, token }.
+ */
+export async function createOrgInvite(orgId, email, role = 'collaborator') {
+  const fn = httpsCallable(functions, 'createOrgInvite');
+  const result = await fn({ orgId, email, role });
+  return result.data; // { inviteId, token }
+}
+
+/**
+ * Returns safe preview info for an invite (orgName, role, inviterName) without accepting it.
+ */
+export async function getOrgInvitePreview(inviteId, token) {
+  const fn = httpsCallable(functions, 'getOrgInvitePreview');
+  const result = await fn({ inviteId, token });
+  return result.data; // { orgId, orgName, role, inviterName, expiresAt }
+}
+
+/**
+ * Accepts an org invite. Adds the current user to the org.
+ * Returns { orgId, orgName }.
+ */
+export async function acceptOrgInvite(inviteId, token) {
+  const fn = httpsCallable(functions, 'acceptOrgInvite');
+  const result = await fn({ inviteId, token });
+  return result.data; // { orgId, orgName }
 }

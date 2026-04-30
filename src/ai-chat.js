@@ -12,7 +12,7 @@
 import { generateBoardWithTasks, generateCard } from './ai.js';
 import { createBoard, setBoardId, PROJECT_TYPES, getDefaultColumnsForProjectType } from './board.js';
 import { createCard, setCurrentUser, updateCard, getCardsSnapshot, getBoardAssignedMembers } from './cards.js';
-import { getAiUsageSummary, consumeAiCredit } from './billing.js';
+import { getAiUsageSummary } from './billing.js';
 import { detectOpenProjectIntent, detectRequestedAnalysisFields, getOpenProjectQuestionSuggestions } from './open-project-intents.js';
 
 const HISTORY_KEY_PREFIX = 'aiChatHistory';
@@ -205,6 +205,7 @@ function setAiChatPinned(pinned, { persist = true, focusInput = true } = {}) {
   const sidebar = document.getElementById('ai-chat-sidebar');
   if (!sidebar) return;
 
+  const wasExpanded = sidebar.classList.contains('ai-chat-expanded');
   sidebar.classList.toggle('ai-chat-pinned', Boolean(pinned));
   if (persist) localStorage.setItem(_key(PIN_KEY_PREFIX), pinned ? '1' : '0');
 
@@ -214,9 +215,16 @@ function setAiChatPinned(pinned, { persist = true, focusInput = true } = {}) {
     sidebar.classList.add('ai-chat-expanded');
     _setButtonsActive(true);
   } else {
-    sidebar.classList.remove('ai-chat-expanded');
-    sidebar.classList.add('ai-chat-collapsed');
-    _setButtonsActive(false);
+    // Unpin should not force-collapse the chat; preserve current open/collapsed state.
+    if (wasExpanded) {
+      sidebar.classList.remove('ai-chat-collapsed');
+      sidebar.classList.add('ai-chat-expanded');
+      _setButtonsActive(true);
+    } else {
+      sidebar.classList.remove('ai-chat-expanded');
+      sidebar.classList.add('ai-chat-collapsed');
+      _setButtonsActive(false);
+    }
   }
 
   _syncChatHeader();
@@ -667,12 +675,9 @@ async function _handleSend(e) {
       return;
     }
 
-    // Every submitted chat message consumes one credit.
-    await consumeAiCredit(_user.uid);
-
     if (_isTrivialMessage(text)) {
       _removeThinking();
-      _addToHistory('assistant', "Hi! I'm AI Dealer. Try describing a project — for example: \"Build a mobile app for tracking workouts\" — and I'll create a full deck with tasks. This message counted toward your daily AI usage.");
+      _addToHistory('assistant', "Hi! I'm AI Dealer. Try describing a project — for example: \"Build a mobile app for tracking workouts\" — and I'll create a full deck with tasks.");
       return;
     }
 

@@ -17,6 +17,23 @@ service cloud.firestore {
         || (boardData.visibility == 'org' && isOrgMember(boardData.orgId));
     }
 
+    function orgRole(orgId) {
+      return orgId != null
+        && exists(/databases/$(database)/documents/organizations/$(orgId))
+        ? get(/databases/$(database)/documents/organizations/$(orgId)).data.memberRoles[request.auth.uid]
+        : null;
+    }
+
+    function canEditBoardData(boardData) {
+      return boardData.userId == request.auth.uid
+        || (
+          boardData.visibility == 'org'
+          && boardData.orgId != null
+          && exists(/databases/$(database)/documents/organizations/$(boardData.orgId))
+          && orgRole(boardData.orgId) in ['owner', 'admin', 'collaborator']
+        );
+    }
+
     function canUseOrgFeatures() {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
@@ -95,17 +112,10 @@ service cloud.firestore {
           && resource.data.organizationId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId
         )
       );
+      // organizationId is now set server-side only; clients can update their own profile fields
       allow write: if signedIn() && (
         request.auth.uid == uid
         || isGlobalAdmin()
-        || (
-          request.method == 'update'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['organizationId'])
-          && request.resource.data.organizationId != null
-          && exists(/databases/$(database)/documents/organizations/$(request.resource.data.organizationId))
-          && get(/databases/$(database)/documents/organizations/$(request.resource.data.organizationId)).data.ownerId == request.auth.uid
-          && uid in get(/databases/$(database)/documents/organizations/$(request.resource.data.organizationId)).data.members
-        )
       );
 
       // Daily usage counters, e.g. /users/{uid}/usage/ai-2026-04-12
@@ -126,31 +136,31 @@ service cloud.firestore {
     // ── organizations ──────────────────────────────────────────────────────
     match /organizations/{orgId} {
       allow read: if signedIn() && (request.auth.uid in resource.data.members || isGlobalAdmin());
-      allow create: if signedIn()
-        && request.resource.data.ownerId == request.auth.uid
-        && request.auth.uid in request.resource.data.members;
-      allow update, delete: if signedIn() && canUseOrgFeatures() && (
+      // Creation and membership changes are server-only via callable functions (admin SDK).
+      allow create: if false;
+      // Owners/admins may update settings (name, allowAiUsage, etc.) but NOT membership fields.
+      allow update: if signedIn() && canUseOrgFeatures() && (
         resource.data.ownerId == request.auth.uid
-        || (
-          isOrgAdmin(orgId)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'admins', 'memberRoles'])
-          && orgMemberCountAllowed(resource.data.ownerId, request.resource.data.members.size())
-          && request.resource.data.ownerId == resource.data.ownerId
-          && request.resource.data.name == resource.data.name
-          && request.resource.data.createdAt == resource.data.createdAt
-        )
-      );
+        || isOrgAdmin(orgId)
+      ) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['members', 'admins', 'memberRoles', 'ownerId', 'createdAt']);
+      allow delete: if false;
+
+      // Org activity log — org owners and admins can read; server-only writes
+      match /activityLog/{eventId} {
+        allow read: if signedIn() && (
+          get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerId == request.auth.uid
+          || request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.admins
+          || isGlobalAdmin()
+        );
+        allow create, update, delete: if false;
+      }
     }
 
     // ── boards ─────────────────────────────────────────────────────────────
     match /boards/{boardId} {
       allow read: if signedIn() && (canReadBoardData(resource.data) || isGlobalAdmin());
-      allow create: if signedIn()
-        && request.resource.data.userId == request.auth.uid
-        && (
-          request.resource.data.visibility == 'private'
-          || (request.resource.data.visibility == 'org' && isOrgMember(request.resource.data.orgId))
-        );
+      // Board creation is server-only via callable function (admin SDK).
+      allow create: if false;
       allow update: if signedIn() && (
         resource.data.userId == request.auth.uid
         || (
@@ -158,7 +168,14 @@ service cloud.firestore {
           && isOrgAdmin(resource.data.orgId)
         )
       );
-      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+      // Board owner OR org admins (for org-owned boards) can delete
+      allow delete: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || (
+          resource.data.visibility == 'org'
+          && isOrgAdmin(resource.data.orgId)
+        )
+      );
     }
 
     // ── cards ──────────────────────────────────────────────────────────────
@@ -175,16 +192,34 @@ service cloud.firestore {
 
       allow create: if signedIn()
         && exists(/databases/$(database)/documents/boards/$(request.resource.data.boardId))
-        && canReadBoardData(get(/databases/$(database)/documents/boards/$(request.resource.data.boardId)).data);
+        && canEditBoardData(get(/databases/$(database)/documents/boards/$(request.resource.data.boardId)).data);
 
       allow update, delete: if signedIn()
         && exists(/databases/$(database)/documents/boards/$(resource.data.boardId))
-        && canReadBoardData(get(/databases/$(database)/documents/boards/$(resource.data.boardId)).data);
+        && canEditBoardData(get(/databases/$(database)/documents/boards/$(resource.data.boardId)).data);
     }
 
     // ── completionLog ────────────────────────────────────────────────────
     match /completionLog/{logId} {
-      allow read, write: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // ── orgInvites ───────────────────────────────────────────────────────
+    // Invites are created and updated server-side only.
+    // Authenticated users can read invites (token is validated server-side on accept).
+    match /orgInvites/{inviteId} {
+      allow read: if signedIn();
+      allow create, update, delete: if false;
+    }
+
+    // ── notifications ────────────────────────────────────────────────────
+    // Users can read and mark-as-read their own notifications; server writes only.
+    match /notifications/{uid}/items/{notifId} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow create, delete: if false;
     }
 
     // ── supportTickets ────────────────────────────────────────────────────

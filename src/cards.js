@@ -43,6 +43,8 @@ let _unsubscribeCards = null;
 
 /** Last known snapshot of cards — used to re-render after a column change. */
 let _lastCards = [];
+let _lastRenderSignature = '';
+let _pendingCompletionByCardId = new Map();
 
 /** Active search/filter query (lowercase). Empty string = no filter. */
 let _filterQuery = '';
@@ -93,6 +95,51 @@ function _normalizeRecurrenceRule(rule = {}, fallbackFrequency = 'weekly') {
   return { frequency: normalizedFrequency, interval, weekdays };
 }
 
+function _normalizeSubtaskPriority(value) {
+  const key = String(value || '').toLowerCase();
+  return ['low', 'medium', 'high', 'urgent'].includes(key) ? key : 'medium';
+}
+
+function _buildSubtaskPriorityBadge(priority, tone = 'card') {
+  const normalized = _normalizeSubtaskPriority(priority);
+  const cardCls = {
+    low: 'bg-slate-500/15 text-slate-200 border-slate-400/25',
+    medium: 'bg-sky-500/15 text-sky-200 border-sky-400/25',
+    high: 'bg-amber-500/15 text-amber-200 border-amber-400/25',
+    urgent: 'bg-rose-500/15 text-rose-200 border-rose-400/25',
+  }[normalized];
+  const listCls = {
+    low: 'bg-slate-100 text-slate-700 border-slate-200',
+    medium: 'bg-sky-100 text-sky-700 border-sky-200',
+    high: 'bg-amber-100 text-amber-700 border-amber-200',
+    urgent: 'bg-rose-100 text-rose-700 border-rose-200',
+  }[normalized];
+  const cls = tone === 'list' ? listCls : cardCls;
+  const label = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  return `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 ${cls}">${label}</span>`;
+}
+
+function _normalizeSubtask(raw = {}) {
+  const recurring = Boolean(raw?.recurring);
+  const recurrenceRule = recurring
+    ? _normalizeRecurrenceRule(
+      raw?.recurrenceRule || { frequency: raw?.recurrenceFrequency || 'weekly', interval: 1 },
+      raw?.recurrenceFrequency || 'weekly'
+    )
+    : null;
+  return {
+    id: raw?.id || `sub-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    title: String(raw?.title || ''),
+    completed: Boolean(raw?.completed),
+    assignee: raw?.assignee || null,
+    dueDate: raw?.dueDate || null,
+    priority: _normalizeSubtaskPriority(raw?.priority),
+    recurring,
+    recurrenceFrequency: recurring ? recurrenceRule.frequency : null,
+    recurrenceRule,
+  };
+}
+
 function _inferWeeklyRuleWeekdays(startDate, dueDate) {
   const seed = dueDate || startDate;
   if (!seed) return [];
@@ -117,8 +164,73 @@ export function subscribeToCards() {
     orderBy('order', 'asc'),
   );
 
-  _unsubscribeCards = onSnapshot(cardsQuery, (snapshot) => {
-    _lastCards = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+  _unsubscribeCards = onSnapshot(cardsQuery, { includeMetadataChanges: true }, (snapshot) => {
+    // Skip local (optimistic/pending) snapshots — we already apply completion
+    // UI immediately in the click handler.  Waiting for server-confirmed data
+    // only eliminates the double-render (local → server) that causes the
+    // avatar / action-button flicker on every checkbox toggle.
+    if (snapshot.metadata.hasPendingWrites) return;
+
+    const nextCards = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    const serverChanges = snapshot.docChanges({ includeMetadataChanges: false });
+    const isPendingCompletionAck =
+      serverChanges.length > 0
+      && serverChanges.every((ch) => ch.type === 'modified' && _pendingCompletionByCardId.has(ch.doc.id));
+
+    if (isPendingCompletionAck) {
+      _lastCards = nextCards;
+      _lastRenderSignature = _cardsRenderSignature(nextCards);
+
+      serverChanges.forEach((ch) => {
+        const cardId = ch.doc.id;
+        const card = nextCards.find((c) => c.id === cardId);
+        const cardEl = document.querySelector(`.card[data-card-id="${cardId}"]`);
+        if (card && cardEl) {
+          const listEl = cardEl.closest('.card-list');
+          const colEl = listEl?.closest('.column');
+          const colTitle = colEl?.querySelector('.col-title-input')?.value || '';
+          const isDoneCol = /\bdone\b|\bfinished\b|\bcomplete[d]?\b|\bdeployment\b|\bresolved\b/i.test(colTitle);
+          _applyCompletionOnlyUi(cardEl, card, isDoneCol);
+          cardEl.dataset.renderHash = _computeCardRenderHash(card, isDoneCol, { includeCompleted: true });
+          cardEl.dataset.renderHashNoCompleted = _computeCardRenderHash(card, isDoneCol, { includeCompleted: false });
+        }
+        _pendingCompletionByCardId.delete(cardId);
+      });
+      return;
+    }
+
+    const sig = _cardsRenderSignature(nextCards);
+    if (sig === _lastRenderSignature) {
+      _lastCards = nextCards;
+      return;
+    }
+
+    const prevCards = _lastCards;
+    _lastCards = nextCards;
+    _lastRenderSignature = sig;
+
+    // Completion-only change: patch just the affected card(s) in place.
+    if (
+      prevCards.length === nextCards.length &&
+      _cardsRenderSignatureNoCompletion(nextCards) === _cardsRenderSignatureNoCompletion(prevCards)
+    ) {
+      nextCards.forEach((card) => {
+        const prev = prevCards.find((c) => c.id === card.id);
+        if (!prev || Boolean(prev.completed) === Boolean(card.completed)) return;
+        const cardEl = document.querySelector(`.card[data-card-id="${card.id}"]`);
+        if (!cardEl) return;
+        const listEl  = cardEl.closest('.card-list');
+        const colEl   = listEl?.closest('.column');
+        const colTitle = colEl?.querySelector('.col-title-input')?.value || '';
+        const isDoneCol = /\bdone\b|\bfinished\b|\bcomplete[d]?\b|\bdeployment\b|\bresolved\b/i.test(colTitle);
+        _applyCompletionOnlyUi(cardEl, card, isDoneCol);
+        cardEl.dataset.renderHash = _computeCardRenderHash(card, isDoneCol, { includeCompleted: true });
+        cardEl.dataset.renderHashNoCompleted = _computeCardRenderHash(card, isDoneCol, { includeCompleted: false });
+      });
+      return;
+    }
+
     renderAllCards(_lastCards);
   });
 }
@@ -129,6 +241,8 @@ export function unsubscribeFromCards() {
     _unsubscribeCards();
     _unsubscribeCards = null;
   }
+  _lastRenderSignature = '';
+  _pendingCompletionByCardId = new Map();
 }
 
 /**
@@ -232,10 +346,13 @@ export function renderListView() {
     return `
       <div class="mt-1.5 pl-3 border-l border-gray-200 space-y-0.5">
         ${subtasks.map((s) => `
-          <label class="flex items-center gap-1.5 text-[11px] ${muted ? 'text-gray-400' : 'text-gray-500'} ${s.completed ? 'line-through' : ''}">
-            <input type="checkbox" class="list-subtask-check w-3.5 h-3.5 rounded border-gray-300 text-brand-500 focus:ring-brand-400"
+          <label class="flex items-start gap-1.5 text-[11px] ${muted ? 'text-gray-400' : 'text-gray-500'} ${s.completed ? 'line-through' : ''}">
+            <input type="checkbox" class="list-subtask-check mt-0.5 w-3.5 h-3.5 rounded border-gray-300 text-brand-500 focus:ring-brand-400"
               data-card-id="${escapeHtml(card.id || '')}" data-subtask-id="${escapeHtml(s.id || '')}" ${s.completed ? 'checked' : ''} />
-            <span>${escapeHtml(s.title || '')}</span>
+            <span class="flex-1">${escapeHtml(s.title || '')}</span>
+            ${s.dueDate ? `<span class="inline-flex items-center text-[10px] border rounded px-1 py-0.5 ${muted ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-white text-gray-600 border-gray-200'}">${new Date(`${s.dueDate}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>` : ''}
+            ${_buildSubtaskPriorityBadge(s.priority, 'list')}
+            ${s.recurring ? `<span class="inline-flex items-center text-[10px] border rounded px-1 py-0.5 ${muted ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}">${escapeHtml(_formatRecurrenceFrequency(s.recurrenceRule || s.recurrenceFrequency || 'weekly'))}</span>` : ''}
           </label>
         `).join('')}
       </div>`;
@@ -308,11 +425,28 @@ export function renderListView() {
         const cardId = chk.dataset.cardId;
         if (!cardId) return;
         const checked = Boolean(chk.checked);
+        _pendingCompletionByCardId.set(cardId, checked);
         const card = _lastCards.find((c) => c.id === cardId);
         const cardEl = document.querySelector(`.card[data-card-id="${cardId}"]`);
+
+        // Immediate optimistic UI on the kanban card (same as board-view handler)
+        if (cardEl) {
+          const listEl  = cardEl.closest('.card-list');
+          const colEl   = listEl?.closest('.column');
+          const colTitle = colEl?.querySelector('.col-title-input')?.value || '';
+          const isDoneCol = /\bdone\b|\bfinished\b|\bcomplete[d]?\b|\bdeployment\b|\bresolved\b/i.test(colTitle);
+          const syntheticCard = { ...(card || {}), completed: checked };
+          _applyCompletionOnlyUi(cardEl, syntheticCard, isDoneCol);
+          cardEl.dataset.renderHash = _computeCardRenderHash(syntheticCard, isDoneCol, { includeCompleted: true });
+          cardEl.dataset.renderHashNoCompleted = _computeCardRenderHash(syntheticCard, isDoneCol, { includeCompleted: false });
+          _lastCards = _lastCards.map((c) => c.id === cardId ? syntheticCard : c);
+          _lastRenderSignature = _cardsRenderSignature(_lastCards);
+        }
+
         try {
           await _applyTaskCompletionToggle(cardId, checked, cardEl, card?.title || '');
         } catch (err) {
+          _pendingCompletionByCardId.delete(cardId);
           console.error('List task toggle failed:', err);
         }
         return;
@@ -329,12 +463,23 @@ export function renderListView() {
         if (!card) return;
 
         const subtasks = Array.isArray(card.subtasks) ? card.subtasks : [];
-        const nextSubtasks = subtasks.map((s) => (
-          s.id === subId ? { ...s, completed: checked } : s
-        ));
+        const nextSubtasks = subtasks.map((s) => {
+          if (s.id !== subId) return s;
+          const normalized = _normalizeSubtask(s);
+          if (checked && normalized.recurring) {
+            const nextDue = _computeNextDueDate(normalized.dueDate, normalized.recurrenceRule || normalized.recurrenceFrequency || 'weekly');
+            return {
+              ...normalized,
+              completed: false,
+              dueDate: nextDue,
+              recurrenceFrequency: normalized.recurrenceRule?.frequency || normalized.recurrenceFrequency || 'weekly',
+            };
+          }
+          return { ...normalized, completed: checked };
+        });
 
         try {
-          await updateCard(cardId, { subtasks: nextSubtasks });
+          await updateCard(cardId, { subtasks: nextSubtasks }, { optimistic: false });
           if (checked) {
             const doneSub = subtasks.find((s) => s.id === subId);
             _logCompletion(cardId, card.title || '', 'subtask', { subtaskTitle: doneSub?.title || '' });
@@ -475,13 +620,13 @@ export async function createCard(columnId, title, description = '', order = 0, c
  * @param {{ title?: string, description?: string, columnId?: string, order?: number }} updates
  * @returns {Promise<void>}
  */
-export async function updateCard(cardId, updates) {
+export async function updateCard(cardId, updates, { optimistic = false } = {}) {
   const cardRef = doc(db, 'cards', cardId);
   const previousCards = _lastCards;
   const optimisticUpdatedAt = new Date();
   let appliedOptimistic = false;
 
-  if (Array.isArray(_lastCards) && _lastCards.some((card) => card.id === cardId)) {
+  if (optimistic && Array.isArray(_lastCards) && _lastCards.some((card) => card.id === cardId)) {
     _lastCards = _lastCards.map((card) => (
       card.id === cardId
         ? { ...card, ...updates, updatedAt: optimisticUpdatedAt }
@@ -606,9 +751,52 @@ function renderAllCards(cards) {
       || columnId || '';
     const isDoneColumn = /\bdone\b|\bfinished\b|\bcomplete[d]?\b|\bdeployment\b|\bresolved\b/i.test(colTitleRaw);
 
-    listEl.innerHTML = '';
+    // Reconcile cards by id/hash so unchanged cards (including assignee avatars)
+    // keep their DOM nodes and do not visually flash on unrelated updates.
+    const existingById = new Map(
+      [...listEl.querySelectorAll('.card[data-card-id]')]
+        .map((el) => [el.dataset.cardId, el])
+    );
+    const desiredIds = new Set();
+    let prevEl = null;
+
     colCards.forEach((card) => {
-      listEl.appendChild(buildCardEl(card, isDoneColumn));
+      desiredIds.add(card.id);
+      const nextHash = _computeCardRenderHash(card, isDoneColumn, { includeCompleted: true });
+      const nextHashNoCompleted = _computeCardRenderHash(card, isDoneColumn, { includeCompleted: false });
+      let cardEl = existingById.get(card.id);
+
+      if (!cardEl) {
+        cardEl = buildCardEl(card, isDoneColumn);
+      } else if (cardEl.dataset.renderHash !== nextHash) {
+        if (cardEl.dataset.renderHashNoCompleted === nextHashNoCompleted) {
+          _applyCompletionOnlyUi(cardEl, card, isDoneColumn);
+          cardEl.dataset.renderHash = nextHash;
+          cardEl.dataset.renderHashNoCompleted = nextHashNoCompleted;
+          cardEl.dataset.order = String(card.order ?? 0);
+        } else {
+          const rebuilt = buildCardEl(card, isDoneColumn);
+          cardEl.replaceWith(rebuilt);
+          cardEl = rebuilt;
+        }
+      } else {
+        // Keep drag/order metadata in sync when reusing an existing node.
+        cardEl.dataset.order = String(card.order ?? 0);
+      }
+
+      if (!prevEl) {
+        if (listEl.firstElementChild !== cardEl) {
+          listEl.insertBefore(cardEl, listEl.firstElementChild);
+        }
+      } else if (prevEl.nextElementSibling !== cardEl) {
+        listEl.insertBefore(cardEl, prevEl.nextElementSibling);
+      }
+
+      prevEl = cardEl;
+    });
+
+    [...listEl.querySelectorAll('.card[data-card-id]')].forEach((el) => {
+      if (!desiredIds.has(el.dataset.cardId)) el.remove();
     });
 
     updateColumnCount(columnId, colCards.length);
@@ -622,6 +810,111 @@ function renderAllCards(cards) {
   }
   if (!document.getElementById('board-calendar-view')?.classList.contains('hidden')) {
     renderCalendarView();
+  }
+}
+
+function _computeCardRenderHash(card, isDoneColumn = false, { includeCompleted = true } = {}) {
+  const normalizedRule = _normalizeRecurrenceRule(
+    card?.recurrenceRule || { frequency: card?.recurrenceFrequency || 'weekly' },
+    card?.recurrenceFrequency || 'weekly'
+  );
+
+  return JSON.stringify({
+    title: card?.title || '',
+    description: card?.description || '',
+    completed: includeCompleted ? Boolean(card?.completed) : undefined,
+    checkable: Boolean(card?.checkable),
+    subtasks: Array.isArray(card?.subtasks) ? card.subtasks : [],
+    dueDate: card?.dueDate || null,
+    recurring: Boolean(card?.recurring),
+    recurrenceRule: normalizedRule,
+    priority: _normalizePriority(card?.priority),
+    attachments: Array.isArray(card?.attachments) ? card.attachments : [],
+    cardColor: card?.cardColor || null,
+    cardBgColor: card?.cardBgColor || null,
+    assignees: Array.isArray(card?.assignees) ? card.assignees : [],
+    isDoneColumn: Boolean(isDoneColumn),
+  });
+}
+
+function _cardsRenderSignature(cards) {
+  return JSON.stringify((cards || []).map((c) => ({
+    id: c.id,
+    boardId: c.boardId || null,
+    columnId: c.columnId || null,
+    order: c.order ?? 0,
+    title: c.title || '',
+    description: c.description || '',
+    completed: Boolean(c.completed),
+    checkable: Boolean(c.checkable),
+    dueDate: c.dueDate || null,
+    recurring: Boolean(c.recurring),
+    recurrenceFrequency: c.recurrenceFrequency || null,
+    recurrenceRule: c.recurrenceRule || null,
+    priority: c.priority || null,
+    assignees: Array.isArray(c.assignees) ? c.assignees : [],
+    subtasks: Array.isArray(c.subtasks) ? c.subtasks : [],
+    attachments: Array.isArray(c.attachments) ? c.attachments : [],
+    cardColor: c.cardColor || null,
+    cardBgColor: c.cardBgColor || null,
+  })));
+}
+
+/** Same as _cardsRenderSignature but omits `completed` — used to detect
+ *  completion-only snapshot changes that can be patched without a full re-render. */
+function _cardsRenderSignatureNoCompletion(cards) {
+  return JSON.stringify((cards || []).map((c) => ({
+    id: c.id,
+    boardId: c.boardId || null,
+    columnId: c.columnId || null,
+    order: c.order ?? 0,
+    title: c.title || '',
+    description: c.description || '',
+    checkable: Boolean(c.checkable),
+    dueDate: c.dueDate || null,
+    recurring: Boolean(c.recurring),
+    recurrenceFrequency: c.recurrenceFrequency || null,
+    recurrenceRule: c.recurrenceRule || null,
+    priority: c.priority || null,
+    assignees: Array.isArray(c.assignees) ? c.assignees : [],
+    subtasks: Array.isArray(c.subtasks) ? c.subtasks : [],
+    attachments: Array.isArray(c.attachments) ? c.attachments : [],
+    cardColor: c.cardColor || null,
+    cardBgColor: c.cardBgColor || null,
+  })));
+}
+
+function _dueBadgeToneClass(dueDate, isCompleted) {
+  if (!dueDate) return 'bg-white/10 text-white/50 border-white/15';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const due = new Date(`${dueDate}T00:00:00`);
+  const isOverdue = !isCompleted && due < today;
+  const isToday = !isCompleted && due.getTime() === today.getTime();
+  if (isOverdue) return 'bg-red-500/20 text-red-300 border-red-500/30';
+  if (isToday) return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+  return 'bg-white/10 text-white/50 border-white/15';
+}
+
+function _applyCompletionOnlyUi(cardEl, card, isDoneColumn = false) {
+  if (!cardEl) return;
+  const isCompleted = Boolean(card?.completed) || Boolean(isDoneColumn);
+
+  cardEl.classList.toggle('opacity-80', isCompleted);
+
+  const taskCheck = cardEl.querySelector('.task-check');
+  if (taskCheck) taskCheck.checked = isCompleted;
+
+  const titleEl = cardEl.querySelector('.card-title');
+  if (titleEl) {
+    titleEl.classList.toggle('line-through', isCompleted);
+    titleEl.classList.toggle('text-white/60', isCompleted);
+    titleEl.classList.toggle('text-white', !isCompleted);
+  }
+
+  const dueBadge = cardEl.querySelector('[data-due-badge="1"]');
+  if (dueBadge) {
+    const dueDate = cardEl.dataset.dueDate || null;
+    dueBadge.className = `inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 ${_dueBadgeToneClass(dueDate, isCompleted)}`;
   }
 }
 
@@ -642,7 +935,7 @@ function buildCardEl(card, isDoneColumn = false) {
   const priority = _normalizePriority(card.priority);
 
   el.className      = [
-    'card relative rounded-lg p-2.5 pb-8 cursor-grab active:cursor-grabbing',
+    'card group relative rounded-lg p-2.5 pb-8 cursor-grab active:cursor-grabbing',
     'border border-white/10 shadow-sm',
     'bg-gradient-to-br from-[#141518] via-[#0a0b0d] to-[#050506]',
     'text-white',
@@ -651,6 +944,8 @@ function buildCardEl(card, isDoneColumn = false) {
   el.draggable      = true;
   el.dataset.cardId   = card.id;
   el.dataset.order    = String(card.order ?? 0);
+  el.dataset.renderHash = _computeCardRenderHash(card, isDoneColumn, { includeCompleted: true });
+  el.dataset.renderHashNoCompleted = _computeCardRenderHash(card, isDoneColumn, { includeCompleted: false });
   el.dataset.subtasks = JSON.stringify(subtasks);
   el.dataset.checkable = String(Boolean(card.checkable));
   el.dataset.dueDate  = dueDate || '';
@@ -678,15 +973,9 @@ function buildCardEl(card, isDoneColumn = false) {
   if (dueDate) {
     const today = new Date(); today.setHours(0,0,0,0);
     const due   = new Date(dueDate + 'T00:00:00');
-    const isOverdue = !isCompleted && due < today;
-    const isToday   = !isCompleted && due.getTime() === today.getTime();
     const label = due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    const cls = isOverdue
-      ? 'bg-red-500/20 text-red-300 border-red-500/30'
-      : isToday
-        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-        : 'bg-white/10 text-white/50 border-white/15';
-    dueDateHtml = `<span class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 ${cls}">
+    const cls = _dueBadgeToneClass(dueDate, isCompleted);
+    dueDateHtml = `<span data-due-badge="1" class="inline-flex items-center gap-1 text-[10px] border rounded px-1.5 py-0.5 ${cls}">
       <svg class="w-2.5 h-2.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
           d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
@@ -714,15 +1003,18 @@ function buildCardEl(card, isDoneColumn = false) {
   }
 
   const subtasksHtml = subtasks.map((task) => `
-    <label class="flex items-center gap-2 text-[11px] text-white/60 mt-0.5 pl-5 border-l border-white/10 ml-1">
+    <label class="flex items-start gap-2 text-[11px] text-white/60 mt-0.5 pl-5 border-l border-white/10 ml-1">
       <input
         type="checkbox"
-        class="subtask-check w-3.5 h-3.5 flex-shrink-0 rounded border-white/30 bg-transparent text-brand-500 focus:ring-brand-400"
+        class="subtask-check mt-0.5 w-3.5 h-3.5 flex-shrink-0 rounded border-white/30 bg-transparent text-brand-500 focus:ring-brand-400"
         data-card-id="${card.id}"
         data-subtask-id="${escapeHtml(task.id)}"
         ${task.completed ? 'checked' : ''}
       />
-      <span class="${task.completed ? 'line-through text-white/35' : 'text-white/60'}">${escapeHtml(task.title)}</span>
+      <span class="min-w-0 flex-1 ${task.completed ? 'line-through text-white/35' : 'text-white/60'}">${escapeHtml(task.title)}</span>
+      ${task.dueDate ? `<span class="inline-flex items-center text-[10px] border rounded px-1 py-0.5 bg-white/10 text-white/50 border-white/15">${new Date(`${task.dueDate}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>` : ''}
+      ${_buildSubtaskPriorityBadge(task.priority)}
+      ${task.recurring ? `<span class="inline-flex items-center text-[10px] border rounded px-1 py-0.5 bg-emerald-500/15 text-emerald-200 border-emerald-400/25">${escapeHtml(_formatRecurrenceFrequency(task.recurrenceRule || task.recurrenceFrequency || 'weekly'))}</span>` : ''}
       ${task.assignee ? `<span class="text-[10px] text-white/40">@${escapeHtml(_boardAssignedMembers.find((m) => m.uid === task.assignee)?.username || 'member')}</span>` : ''}
     </label>
   `).join('');
@@ -813,14 +1105,6 @@ function buildCardEl(card, isDoneColumn = false) {
       </svg>
     </button>
   `;
-
-  // Show action buttons on hover
-  el.addEventListener('mouseenter', () => {
-    el.querySelector('.card-actions').classList.remove('opacity-0');
-  });
-  el.addEventListener('mouseleave', () => {
-    el.querySelector('.card-actions').classList.add('opacity-0');
-  });
 
   // Prevent arrow button clicks from accidentally starting a card drag
   el.querySelectorAll('.move-card-prev-btn, .move-card-next-btn').forEach((btn) => {
@@ -939,8 +1223,37 @@ export function initCardEvents(user) {
     if (taskCheck) {
       const isCompleted = Boolean(taskCheck.checked);
       const cardEl = taskCheck.closest('.card');
+      const cardId = taskCheck.dataset.cardId;
+      _pendingCompletionByCardId.set(cardId, isCompleted);
       const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
-      await _applyTaskCompletionToggle(taskCheck.dataset.cardId, isCompleted, cardEl, cardTitle);
+
+      // Apply completion visuals immediately (synchronous, same frame as the
+      // click) so there is zero visible delay or flash before the Firestore
+      // snapshot arrives.  We also pre-update the card's stored render hashes
+      // so that the snapshot handler treats it as a no-op and skips any
+      // reconciliation that would otherwise trigger a DOM rebuild.
+      if (cardEl) {
+        const listEl  = cardEl.closest('.card-list');
+        const colEl   = listEl?.closest('.column');
+        const colTitle = colEl?.querySelector('.col-title-input')?.value || '';
+        const isDoneCol = /\bdone\b|\bfinished\b|\bcomplete[d]?\b|\bdeployment\b|\bresolved\b/i.test(colTitle);
+        // Build a synthetic card object with the toggled completion state
+        const prevCard = _lastCards.find((c) => c.id === cardId) || {};
+        const syntheticCard = { ...prevCard, completed: isCompleted };
+        _applyCompletionOnlyUi(cardEl, syntheticCard, isDoneCol);
+        cardEl.dataset.renderHash = _computeCardRenderHash(syntheticCard, isDoneCol, { includeCompleted: true });
+        cardEl.dataset.renderHashNoCompleted = _computeCardRenderHash(syntheticCard, isDoneCol, { includeCompleted: false });
+        // Update _lastCards in memory so the snapshot signature check skips it
+        _lastCards = _lastCards.map((c) => c.id === cardId ? syntheticCard : c);
+        _lastRenderSignature = _cardsRenderSignature(_lastCards);
+      }
+
+      try {
+        await _applyTaskCompletionToggle(cardId, isCompleted, cardEl, cardTitle);
+      } catch (err) {
+        _pendingCompletionByCardId.delete(cardId);
+        console.error('Task toggle failed:', err);
+      }
       return;
     }
 
@@ -949,12 +1262,21 @@ export function initCardEvents(user) {
     if (subtaskCheck) {
       const cardEl = subtaskCheck.closest('.card');
       const subtasks = _readSubtasksFromCardEl(cardEl);
-      const nextSubtasks = subtasks.map((task) => (
-        task.id === subtaskCheck.dataset.subtaskId
-          ? { ...task, completed: Boolean(subtaskCheck.checked) }
-          : task
-      ));
-      await updateCard(subtaskCheck.dataset.cardId, { subtasks: nextSubtasks });
+      const nextSubtasks = subtasks.map((task) => {
+        if (task.id !== subtaskCheck.dataset.subtaskId) return task;
+        const normalized = _normalizeSubtask(task);
+        if (subtaskCheck.checked && normalized.recurring) {
+          const nextDue = _computeNextDueDate(normalized.dueDate, normalized.recurrenceRule || normalized.recurrenceFrequency || 'weekly');
+          return {
+            ...normalized,
+            completed: false,
+            dueDate: nextDue,
+            recurrenceFrequency: normalized.recurrenceRule?.frequency || normalized.recurrenceFrequency || 'weekly',
+          };
+        }
+        return { ...normalized, completed: Boolean(subtaskCheck.checked) };
+      });
+      await updateCard(subtaskCheck.dataset.cardId, { subtasks: nextSubtasks }, { optimistic: false });
       if (subtaskCheck.checked) {
         const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
         const subtaskTitle = subtaskCheck.closest('label')?.querySelector('span')?.textContent?.trim() || '';
@@ -1224,7 +1546,7 @@ export function initCardEvents(user) {
 }
 
 async function _applyTaskCompletionToggle(cardId, isCompleted, cardEl = null, fallbackTitle = '') {
-  await updateCard(cardId, { completed: isCompleted });
+  await updateCard(cardId, { completed: isCompleted }, { optimistic: false });
   if (!isCompleted) return;
 
   const cardTitle = cardEl?.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim()
@@ -1387,17 +1709,48 @@ function _openAttachmentPreviewModal(attachments, startIndex = 0) {
 function _openAddSubtaskModal(cardId, cardEl) {
   const modalRoot = document.getElementById('modal-root');
 
+  const assigneeOptions = _boardAssignedMembers.length > 0
+    ? _boardAssignedMembers.map((m) => (
+      `<option value="${escapeHtml(m.uid)}">${escapeHtml(m.displayName || `@${m.username || m.uid}`)}</option>`
+    )).join('')
+    : '';
+
+  const buildRowHtml = () => `
+    <div class="subtask-row grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_120px_${_boardAssignedMembers.length > 0 ? '160px_' : ''}auto] gap-2 items-center">
+      <input
+        type="text"
+        placeholder="Sub task name"
+        maxlength="200"
+        class="subtask-input w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500"
+      />
+      <input
+        type="date"
+        class="subtask-due-date w-full rounded-lg border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500"
+      />
+      ${_boardAssignedMembers.length > 0 ? `
+        <select class="subtask-assignee w-full rounded-lg border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500">
+          <option value="">Unassigned</option>
+          ${assigneeOptions}
+        </select>
+      ` : ''}
+      <button type="button" class="subtask-remove-row text-gray-300 hover:text-red-400 transition-colors p-1 rounded" title="Remove row" aria-label="Remove row">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+  `;
+
   modalRoot.innerHTML = `
     <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+      <div class="bg-white rounded-xl shadow-xl w-full max-w-2xl p-6">
         <h3 class="text-lg font-semibold text-gray-800 mb-4">Add sub tasks</h3>
+        <div class="mb-2 grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_120px_${_boardAssignedMembers.length > 0 ? '160px_' : ''}auto] gap-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+          <span>Title</span>
+          <span>Due</span>
+          ${_boardAssignedMembers.length > 0 ? '<span>Assignee</span>' : ''}
+          <span></span>
+        </div>
         <div id="subtask-inputs" class="flex flex-col gap-2 mb-4">
-          <input
-            type="text"
-            placeholder="Sub task name"
-            maxlength="200"
-            class="subtask-input w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500"
-          />
+          ${buildRowHtml()}
         </div>
         <button id="subtask-add-row"
           class="flex items-center gap-1.5 text-sm text-brand-600 hover:text-brand-700 mb-4 transition-colors">
@@ -1425,16 +1778,32 @@ function _openAddSubtaskModal(cardId, cardEl) {
   firstInput.focus();
 
   const addInputRow = () => {
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = 'Sub task name';
-    input.maxLength = 200;
-    input.className = 'subtask-input w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500';
-    inputsContainer.appendChild(input);
-    input.focus();
+    const wrap = document.createElement('div');
+    wrap.innerHTML = buildRowHtml();
+    const row = wrap.firstElementChild;
+    if (!row) return;
+    inputsContainer.appendChild(row);
+    row.querySelector('.subtask-input')?.focus();
   };
 
   document.getElementById('subtask-add-row').addEventListener('click', addInputRow);
+
+  inputsContainer.addEventListener('click', (e) => {
+    const removeBtn = e.target.closest('.subtask-remove-row');
+    if (!removeBtn) return;
+    const rows = inputsContainer.querySelectorAll('.subtask-row');
+    if (rows.length <= 1) {
+      const titleInput = rows[0]?.querySelector('.subtask-input');
+      const dueInput = rows[0]?.querySelector('.subtask-due-date');
+      const assigneeSel = rows[0]?.querySelector('.subtask-assignee');
+      if (titleInput) titleInput.value = '';
+      if (dueInput) dueInput.value = '';
+      if (assigneeSel) assigneeSel.value = '';
+      titleInput?.focus();
+      return;
+    }
+    removeBtn.closest('.subtask-row')?.remove();
+  });
 
   // Enter in any input moves focus to the next input or adds a new row
   inputsContainer.addEventListener('keydown', (e) => {
@@ -1456,20 +1825,28 @@ function _openAddSubtaskModal(cardId, cardEl) {
   });
 
   document.getElementById('subtask-done').addEventListener('click', async () => {
-    const titles = [...inputsContainer.querySelectorAll('.subtask-input')]
-      .map((i) => i.value.trim())
-      .filter(Boolean);
+    const rows = [...inputsContainer.querySelectorAll('.subtask-row')];
+    const rowsData = rows.map((row) => ({
+      title: row.querySelector('.subtask-input')?.value?.trim() || '',
+      dueDate: row.querySelector('.subtask-due-date')?.value || null,
+      assignee: row.querySelector('.subtask-assignee')?.value || null,
+    })).filter((r) => r.title);
 
-    if (titles.length === 0) { close(); return; }
+    if (rowsData.length === 0) { close(); return; }
 
     const existing = _readSubtasksFromCardEl(cardEl);
     const nextSubtasks = [
       ...existing,
-      ...titles.map((title) => ({
+      ...rowsData.map((row) => ({
         id: `sub-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-        title,
+        title: row.title,
         completed: false,
-        assignee: null,
+        assignee: row.assignee,
+        dueDate: row.dueDate,
+        priority: 'medium',
+        recurring: false,
+        recurrenceFrequency: null,
+        recurrenceRule: null,
       })),
     ];
 
@@ -1529,12 +1906,12 @@ async function _logCompletion(cardId, cardTitle, type, extra = {}) {
 
 /**
  * Uploads an array of File objects to Firebase Storage and returns their metadata.
- * Path: attachments/{userId}/{timestamp}_{filename}
+ * Path: attachments/{boardId}/{userId}/{timestamp}_{filename}
  */
-async function _uploadAttachments(files, userId) {
+async function _uploadAttachments(files, userId, boardId) {
   const results = [];
   for (const file of files) {
-    const path    = `attachments/${userId}/${Date.now()}_${file.name}`;
+    const path    = `attachments/${boardId}/${userId}/${Date.now()}_${file.name}`;
     const fileRef = storageRef(storage, path);
     await uploadBytes(fileRef, file);
     const url = await getDownloadURL(fileRef);
@@ -1557,7 +1934,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   const isEdit    = Boolean(cardId);
 
   // Local mutable copy of subtasks for the edit session
-  let editSubtasks = subtasks.map((s) => ({ ...s }));
+  let editSubtasks = subtasks.map((s) => _normalizeSubtask(s));
   // Local mutable copy of attachments
   let editAttachments = attachments.map((a) => ({ ...a }));
   // Local mutable copy of comments
@@ -1703,15 +2080,42 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
   };
 
   const _subtaskRowHtml = (s) => `
-    <li class="flex items-center gap-2 group" data-subtask-id="${escapeHtml(s.id)}">
+    <li class="flex items-start gap-2 group" data-subtask-id="${escapeHtml(s.id)}">
       <input type="checkbox" class="modal-subtask-check flex-shrink-0 rounded border-gray-300 text-brand-500 focus:ring-brand-400" ${s.completed ? 'checked' : ''} />
-      <input type="text" class="modal-subtask-title flex-1 text-sm border-0 border-b border-transparent focus:border-gray-300 focus:ring-0 bg-transparent px-0 py-0.5 ${s.completed ? 'line-through text-gray-400' : 'text-gray-700'}" value="${escapeHtml(s.title)}" placeholder="Subtask…" maxlength="200" />
-      ${_boardAssignedMembers.length > 0 ? `
-        <select class="modal-subtask-assignee rounded border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500" data-subtask-id="${escapeHtml(s.id)}">
-          <option value="">Unassigned</option>
-          ${_boardAssignedMembers.map((m) => `<option value="${escapeHtml(m.uid)}" ${s.assignee === m.uid ? 'selected' : ''}>${escapeHtml(m.displayName || `@${m.username || m.uid}`)}</option>`).join('')}
-        </select>
-      ` : ''}
+      <div class="flex-1 min-w-0">
+        <input type="text" class="modal-subtask-title w-full text-sm border-0 border-b border-transparent focus:border-gray-300 focus:ring-0 bg-transparent px-0 py-0.5 ${s.completed ? 'line-through text-gray-400' : 'text-gray-700'}" value="${escapeHtml(s.title)}" placeholder="Subtask…" maxlength="200" />
+        <div class="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <input type="date" class="modal-subtask-due-date rounded border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500" value="${s.dueDate || ''}" />
+          <select class="modal-subtask-priority rounded border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500">
+            <option value="low" ${_normalizeSubtaskPriority(s.priority) === 'low' ? 'selected' : ''}>Low</option>
+            <option value="medium" ${_normalizeSubtaskPriority(s.priority) === 'medium' ? 'selected' : ''}>Medium</option>
+            <option value="high" ${_normalizeSubtaskPriority(s.priority) === 'high' ? 'selected' : ''}>High</option>
+            <option value="urgent" ${_normalizeSubtaskPriority(s.priority) === 'urgent' ? 'selected' : ''}>Urgent</option>
+          </select>
+        </div>
+        <div class="mt-1.5 flex flex-wrap items-center gap-2">
+          ${_boardAssignedMembers.length > 0 ? `
+            <select class="modal-subtask-assignee rounded border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500" data-subtask-id="${escapeHtml(s.id)}">
+              <option value="">Unassigned</option>
+              ${_boardAssignedMembers.map((m) => `<option value="${escapeHtml(m.uid)}" ${s.assignee === m.uid ? 'selected' : ''}>${escapeHtml(m.displayName || `@${m.username || m.uid}`)}</option>`).join('')}
+            </select>
+          ` : ''}
+          <label class="inline-flex items-center gap-1 text-xs text-gray-600">
+            <input type="checkbox" class="modal-subtask-recurring rounded border-gray-300 text-brand-500 focus:ring-brand-400" ${s.recurring ? 'checked' : ''} />
+            <span>Recurring</span>
+          </label>
+          <div class="modal-subtask-recurrence-wrap inline-flex items-center gap-1 ${s.recurring ? '' : 'hidden'}">
+            <input type="number" min="1" max="365" class="modal-subtask-recurrence-interval w-16 rounded border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500" value="${Math.max(1, Number.parseInt(s.recurrenceRule?.interval, 10) || 1)}" />
+            <select class="modal-subtask-recurrence-frequency rounded border-gray-300 text-xs focus:ring-brand-500 focus:border-brand-500">
+              <option value="daily" ${_normalizeRecurrenceRule(s.recurrenceRule || { frequency: s.recurrenceFrequency || 'weekly' }, s.recurrenceFrequency || 'weekly').frequency === 'daily' ? 'selected' : ''}>day(s)</option>
+              <option value="weekly" ${_normalizeRecurrenceRule(s.recurrenceRule || { frequency: s.recurrenceFrequency || 'weekly' }, s.recurrenceFrequency || 'weekly').frequency === 'weekly' ? 'selected' : ''}>week(s)</option>
+              <option value="monthly" ${_normalizeRecurrenceRule(s.recurrenceRule || { frequency: s.recurrenceFrequency || 'weekly' }, s.recurrenceFrequency || 'weekly').frequency === 'monthly' ? 'selected' : ''}>month(s)</option>
+              <option value="quarterly" ${_normalizeRecurrenceRule(s.recurrenceRule || { frequency: s.recurrenceFrequency || 'weekly' }, s.recurrenceFrequency || 'weekly').frequency === 'quarterly' ? 'selected' : ''}>quarter(s)</option>
+              <option value="annual" ${_normalizeRecurrenceRule(s.recurrenceRule || { frequency: s.recurrenceFrequency || 'weekly' }, s.recurrenceFrequency || 'weekly').frequency === 'annual' ? 'selected' : ''}>year(s)</option>
+            </select>
+          </div>
+        </div>
+      </div>
       <button type="button" class="modal-subtask-delete flex-shrink-0 text-gray-300 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100" title="Remove">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
@@ -1738,7 +2142,17 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
 
   const _addNewSubtaskRow = () => {
     const id = `sub-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    editSubtasks.push({ id, title: '', completed: false, assignee: null });
+    editSubtasks.push({
+      id,
+      title: '',
+      completed: false,
+      assignee: null,
+      dueDate: null,
+      priority: 'medium',
+      recurring: false,
+      recurrenceFrequency: null,
+      recurrenceRule: null,
+    });
     _renderSubtasks();
     // Focus the newly added input
     const list = document.getElementById('modal-subtask-list');
@@ -1780,6 +2194,66 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
       sel.addEventListener('change', () => {
         const id = sel.dataset.subtaskId;
         editSubtasks = editSubtasks.map((s) => s.id === id ? { ...s, assignee: sel.value || null } : s);
+      });
+    });
+
+    section.querySelectorAll('.modal-subtask-due-date').forEach((inp) => {
+      inp.addEventListener('change', () => {
+        const id = inp.closest('li').dataset.subtaskId;
+        editSubtasks = editSubtasks.map((s) => s.id === id ? { ...s, dueDate: inp.value || null } : s);
+      });
+    });
+
+    section.querySelectorAll('.modal-subtask-priority').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const id = sel.closest('li').dataset.subtaskId;
+        editSubtasks = editSubtasks.map((s) => s.id === id ? { ...s, priority: _normalizeSubtaskPriority(sel.value) } : s);
+      });
+    });
+
+    section.querySelectorAll('.modal-subtask-recurring').forEach((chk) => {
+      chk.addEventListener('change', () => {
+        const row = chk.closest('li');
+        const id = row?.dataset?.subtaskId;
+        const wrap = row?.querySelector('.modal-subtask-recurrence-wrap');
+        if (wrap) wrap.classList.toggle('hidden', !chk.checked);
+
+        const frequencySel = row?.querySelector('.modal-subtask-recurrence-frequency');
+        const intervalInp = row?.querySelector('.modal-subtask-recurrence-interval');
+        const rule = chk.checked
+          ? _normalizeRecurrenceRule({
+            frequency: frequencySel?.value || 'weekly',
+            interval: intervalInp?.value || 1,
+          }, frequencySel?.value || 'weekly')
+          : null;
+
+        editSubtasks = editSubtasks.map((s) => s.id === id ? {
+          ...s,
+          recurring: chk.checked,
+          recurrenceFrequency: rule ? rule.frequency : null,
+          recurrenceRule: rule,
+        } : s);
+      });
+    });
+
+    section.querySelectorAll('.modal-subtask-recurrence-frequency, .modal-subtask-recurrence-interval').forEach((control) => {
+      control.addEventListener('change', () => {
+        const row = control.closest('li');
+        const id = row?.dataset?.subtaskId;
+        const recurringChk = row?.querySelector('.modal-subtask-recurring');
+        const frequencySel = row?.querySelector('.modal-subtask-recurrence-frequency');
+        const intervalInp = row?.querySelector('.modal-subtask-recurrence-interval');
+        if (!recurringChk?.checked) return;
+        const rule = _normalizeRecurrenceRule({
+          frequency: frequencySel?.value || 'weekly',
+          interval: intervalInp?.value || 1,
+        }, frequencySel?.value || 'weekly');
+        editSubtasks = editSubtasks.map((s) => s.id === id ? {
+          ...s,
+          recurring: true,
+          recurrenceFrequency: rule.frequency,
+          recurrenceRule: rule,
+        } : s);
       });
     });
 
@@ -2063,7 +2537,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
             />
             <span class="text-sm text-gray-600">Make task checkable</span>
           </label>
-          ${isEdit ? `<div id="modal-subtasks-section">${_subtasksSectionInner()}</div>` : ''}
+          <div id="modal-subtasks-section">${_subtasksSectionInner()}</div>
           <div id="modal-attachments-section">${_attachmentsSectionInner()}</div>
             ${isEdit && _boardAssignedMembers.length > 0 ? `<div id="modal-assignees-section" class="border-t border-gray-100 pt-3">${_assigneesSectionInner()}</div>` : ''}
             ${isEdit ? `<div id="modal-comments-section" class="border-t border-gray-100 pt-3">${_commentsSectionInner()}</div>` : ''}
@@ -2146,12 +2620,14 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
       let uploadedAttachments = [];
       if (pendingFiles.length) {
         const uid = _currentUid || auth_uid();
-        uploadedAttachments = await _uploadAttachments(pendingFiles, uid);
+        uploadedAttachments = await _uploadAttachments(pendingFiles, uid, getBoardId());
       }
       const finalAttachments = [...editAttachments, ...uploadedAttachments];
+      const finalSubtasks = editSubtasks
+        .map((s) => _normalizeSubtask(s))
+        .filter((s) => s.title.trim() !== '');
 
       if (isEdit) {
-        const finalSubtasks = editSubtasks.filter((s) => s.title.trim() !== '');
         await updateCard(cardId, {
           title: newTitle, description: newDesc, checkable: newCheckable,
           subtasks: finalSubtasks, startDate: newStartDate, dueDate: newDueDate, attachments: finalAttachments,
@@ -2164,7 +2640,7 @@ function openCardModal({ columnId, cardId, title = '', description = '', checkab
       } else {
         const listEl    = document.querySelector(`.card-list[data-column-id="${columnId}"]`);
         const lastOrder = listEl?.children.length ?? 0;
-        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, [], newDueDate, finalAttachments, null, null, newRecurring, newRecurrenceRule?.frequency || null, newStartDate, newPriority, newRecurrenceRule);
+        await createCard(columnId, newTitle, newDesc, lastOrder, newCheckable, finalSubtasks, newDueDate, finalAttachments, null, null, newRecurring, newRecurrenceRule?.frequency || null, newStartDate, newPriority, newRecurrenceRule);
       }
       close();
     } catch (err) {
@@ -2343,11 +2819,7 @@ async function _handleRecurringComplete(cardId, cardEl) {
 
   let subtasks = [];
   try { subtasks = JSON.parse(cardEl.dataset.subtasks || '[]'); } catch (_) {}
-  const freshSubtasks = subtasks.map((s) => ({
-    ...s,
-    id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    completed: false,
-  }));
+  const freshSubtasks = _prepareSubtasksForClone(subtasks, { advanceRecurringDue: true });
 
   const lastOrder = firstCol.querySelectorAll('.card').length;
   await createCard(firstColumnId, title, desc, lastOrder, Boolean(cardEl.dataset.checkable === 'true'), freshSubtasks, nextDue, [], null, null, true, recurrenceRule.frequency, null, priority, recurrenceRule);
@@ -2395,11 +2867,30 @@ function _computeNextDueDate(currentDue, recurrenceRule) {
   return base.toISOString().split('T')[0];
 }
 
+function _prepareSubtasksForClone(subtasks, { advanceRecurringDue = false } = {}) {
+  return (Array.isArray(subtasks) ? subtasks : []).map((raw, idx) => {
+    const normalized = _normalizeSubtask(raw);
+    const nextDue = advanceRecurringDue && normalized.recurring
+      ? _computeNextDueDate(normalized.dueDate, normalized.recurrenceRule || normalized.recurrenceFrequency || 'weekly')
+      : (normalized.dueDate || null);
+    return {
+      ...normalized,
+      id: `sub-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+      completed: false,
+      dueDate: nextDue,
+      recurrenceFrequency: normalized.recurring
+        ? (normalized.recurrenceRule?.frequency || normalized.recurrenceFrequency || 'weekly')
+        : null,
+    };
+  });
+}
+
 // ─── Clone card ───────────────────────────────────────────────────────────────
 
 async function _cloneCard(cardId, cardEl) {
-  const columnId = cardEl.closest('.card-list')?.dataset.columnId;
-  if (!columnId) return;
+  const listEl = cardEl.closest('.card-list');
+  const columnId = listEl?.dataset.columnId;
+  if (!columnId || !listEl) return;
 
   const title = cardEl.querySelector('.card-title')?.textContent?.replace(/\s*\d+\/\d+$/, '').trim() || '';
   const desc = cardEl.querySelector('.card-desc')?.textContent?.trim() || '';
@@ -2414,17 +2905,21 @@ async function _cloneCard(cardId, cardEl) {
   recurrenceFrequency = cardEl.dataset.recurrenceFrequency || 'weekly';
   try { recurrenceRule = _normalizeRecurrenceRule(JSON.parse(cardEl.dataset.recurrenceRule || '{}'), recurrenceFrequency); } catch (_) { recurrenceRule = _normalizeRecurrenceRule({ frequency: recurrenceFrequency }, recurrenceFrequency); }
 
-  const freshSubtasks = subtasks.map((s) => ({
-    ...s,
-    id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    completed: false,
-  }));
+  const freshSubtasks = _prepareSubtasksForClone(subtasks, { advanceRecurringDue: false });
 
-  const listEl = document.querySelector(`.card-list[data-column-id="${columnId}"]`);
-  const lastOrder = listEl?.children.length ?? 0;
+  const sourceOrder = Number.parseFloat(cardEl.dataset.order || '0');
+  const nextCardEl = cardEl.nextElementSibling?.matches?.('.card[data-order]')
+    ? cardEl.nextElementSibling
+    : null;
+  const nextOrder = nextCardEl
+    ? Number.parseFloat(nextCardEl.dataset.order || '0')
+    : null;
+  const cloneOrder = Number.isFinite(sourceOrder)
+    ? (Number.isFinite(nextOrder) ? (sourceOrder + nextOrder) / 2 : sourceOrder + 1)
+    : (listEl.querySelectorAll('.card').length || 0);
 
   await createCard(
-    columnId, `${title} (copy)`, desc, lastOrder,
+    columnId, `${title} (copy)`, desc, cloneOrder,
     Boolean(cardEl.dataset.checkable === 'true'),
     freshSubtasks, cardEl.dataset.dueDate || null,
     attachments, null, null, recurring, recurrenceRule.frequency, null, priority, recurrenceRule,

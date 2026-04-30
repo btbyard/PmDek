@@ -208,6 +208,14 @@
                  bg-sky-100 hover:bg-sky-200 border border-sky-300 rounded-lg transition-colors">
           Organizations
         </button>
+        <!-- Notification bell -->
+        <button id="notifications-btn-boards" aria-label="Notifications"
+          class="relative p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.657-1.414"/>
+          </svg>
+          <span id="notif-badge" class="hidden absolute -top-0.5 -right-0.5 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-0.5">0</span>
+        </button>
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
         <button id="account-menu-btn-boards" aria-label="Account menu" title="Account settings"
@@ -370,6 +378,14 @@
       <!-- Mobile views dropdown (hidden on md+) -->
 
       <div id="board-header-right" class="flex items-center gap-3">
+        <!-- Notification bell -->
+        <button id="notifications-btn-board" aria-label="Notifications"
+          class="relative p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.657-1.414"/>
+          </svg>
+          <span class="notif-badge-board hidden absolute -top-0.5 -right-0.5 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-0.5"></span>
+        </button>
         <img class="user-avatar w-7 h-7 rounded-full hidden object-cover" src="" alt="" />
         <span class="user-display-name text-sm text-gray-600 hidden sm:inline"></span>
         <button id="account-menu-btn-board" aria-label="Account menu" title="Account settings"
@@ -495,6 +511,10 @@
           <button id="ai-dashboard-btn"
             class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sky-900 bg-sky-100 hover:bg-sky-200 border border-sky-300 rounded-lg transition-colors">
             AI Dashboard
+          </button>
+          <button id="ai-direct-insights-btn"
+            class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-violet-900 bg-violet-100 hover:bg-violet-200 border border-violet-300 rounded-lg transition-colors">
+            AI Direct Insights
           </button>
           <button id="mobile-ai-chat-toggle" aria-label="Toggle AI chat" title="Open AI Chat"
             class="sm:hidden p-1.5 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded-lg transition-colors flex items-center">
@@ -987,6 +1007,28 @@
 
   <!-- Modal portal -->
   <div id="modal-root"></div>
+
+  <!-- Notification panel (shared across all views, positioned fixed) -->
+  <div id="notifications-panel" class="hidden fixed right-4 top-16 w-80 max-h-96 bg-white rounded-xl shadow-xl border border-gray-200 z-[60] overflow-hidden flex flex-col">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 flex-shrink-0">
+      <h3 class="text-sm font-semibold text-gray-800">Notifications</h3>
+      <button id="notifications-mark-all-read" class="text-xs text-brand-600 hover:text-brand-700 transition-colors">Mark all read</button>
+    </div>
+    <div id="notifications-list" class="overflow-y-auto flex-1">
+      <p class="px-4 py-6 text-sm text-center text-gray-400">No notifications yet.</p>
+    </div>
+  </div>
+
+  <!-- Invite acceptance banner (shown when landing via invite link) -->
+  <div id="invite-banner" class="hidden fixed top-0 inset-x-0 z-[70] bg-brand-600 text-white px-4 py-3 flex items-center justify-between gap-3 shadow-lg">
+    <div id="invite-banner-content" class="text-sm font-medium"></div>
+    <div class="flex items-center gap-2 flex-shrink-0">
+      <button id="invite-accept-btn" class="px-3 py-1 text-xs font-semibold bg-white text-brand-700 rounded-lg hover:bg-brand-50 transition-colors">Accept Invite</button>
+      <button id="invite-dismiss-btn" class="p-1 text-white/70 hover:text-white transition-colors" aria-label="Dismiss">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
 
   <script type="module" src="/src/main.js"></script>
 

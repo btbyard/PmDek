@@ -24,12 +24,12 @@ import { subscribeToCards, unsubscribeFromCards, initCardEvents, setBoardAssigne
 import { renderBoardsHome, openCreateBoardModal }                 from './boards-home.js';
 import { initAiChat, setAiChatMode, openAiChatWithPrompt, collapseAiChat, expandAiChat } from './ai-chat.js';
 import { initMobileNav } from './mobile-nav.js';
-import { doc, getDoc }                                             from 'firebase/firestore';
+import { doc, getDoc, collection, query, orderBy, limit, onSnapshot, updateDoc } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL }          from 'firebase/storage';
 import { updateProfile }                                           from 'firebase/auth';
 import { db, functions, storage, auth as firebaseAuth }            from './firebase.js';
 import { ensureUserProfile, claimUsername, validateUsername, checkUsernameAvailable, updateUserDisplayName, updateUserPhotoURL, getUserProfile, getAllUsers, setUserAdminStatus } from './users.js';
-import { createOrg, getOrgById, getOrgMembers, getUserOrganizations, addMemberByUsername, removeMember, setOrgMemberRole, getAllOrganizations, isOrgAiUsageAllowed, setOrgAiUsageSetting } from './org.js';
+import { createOrg, getOrgById, getOrgMembers, getUserOrganizations, addMemberByUsername, removeMember, setOrgMemberRole, transferOrgOwnership, getAllOrganizations, isOrgAiUsageAllowed, setOrgAiUsageSetting, createOrgInvite, getOrgInvitePreview, acceptOrgInvite } from './org.js';
 import { BILLING_PLANS, getPlanConfig, getUserPlan, getUserBillingContext, canCreateOrganization, ensureBillingDefaults }      from './billing.js';
 import { httpsCallable }                                           from 'firebase/functions';
 
@@ -57,6 +57,19 @@ let _boardViewMode = 'kanban';
 let _activeViewName = 'landing';
 let _adminPanelReturnView = 'boards';
 let _infoPageReturnView = 'boards';
+
+// Notifications
+let _unsubNotifications = null;
+let _notifItems = [];
+let _pendingInviteId = null;
+let _pendingInviteToken = null;
+let _directInsightsState = {
+  running: false,
+  steps: [],
+  index: 0,
+  timer: null,
+  tooltipEl: null,
+};
 
 const THEME_STORAGE_KEY = 'pmdeck-theme';
 
@@ -103,12 +116,15 @@ initAuth(
     const _savedHash = location.hash;
     await _showBoardsHome();
     await _restoreFromHash(_savedHash);
+    _subscribeToNotifications(user.uid);
+    _checkInviteParams();
   },
   () => {
     _user = null;
     window.__PMDEK_UID = '';
     _userProfile = null;
     unsubscribeFromCards();
+    if (_unsubNotifications) { _unsubNotifications(); _unsubNotifications = null; }
     _showView('landing');
   },
 );
@@ -340,6 +356,7 @@ function _applyOrgAiRestrictions(restricted) {
     document.getElementById('ai-trigger-btn'),
     document.getElementById('ai-board-help-btn-board'),
     document.getElementById('ai-dashboard-btn'),
+    document.getElementById('ai-direct-insights-btn'),
     document.getElementById('mobile-ai-chat-toggle'),
   ];
   
@@ -354,6 +371,245 @@ function _applyOrgAiRestrictions(restricted) {
       }
     }
   });
+}
+
+function _isDoneLikeColumnId(columnId) {
+  return /\bdone\b|\bfinish(?:ed)?\b|\bcomplete(?:d)?\b|\bdeployment\b|\bresolved\b/i.test(String(columnId || ''));
+}
+
+function _toCardDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value?.toDate === 'function') {
+    const d = value.toDate();
+    return Number.isNaN(d?.getTime?.()) ? null : d;
+  }
+  if (typeof value?.seconds === 'number') {
+    const d = new Date(value.seconds * 1000);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function _collectDirectInsightSteps(cards) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const in3Days = new Date(today);
+  in3Days.setDate(in3Days.getDate() + 3);
+
+  const openCards = (cards || []).filter((c) => !Boolean(c?.completed) && !_isDoneLikeColumnId(c?.columnId));
+  const memberByUid = new Map((getBoardAssignedMembers() || []).map((m) => [m.uid, m]));
+  const steps = [];
+  const used = new Set();
+  const addStep = (card, title, detail) => {
+    if (!card?.id || used.has(card.id)) return;
+    used.add(card.id);
+    steps.push({ cardId: card.id, title, detail });
+  };
+
+  const overdue = openCards
+    .filter((c) => c?.dueDate)
+    .map((c) => ({ card: c, due: new Date(`${c.dueDate}T00:00:00`) }))
+    .filter(({ due }) => !Number.isNaN(due.getTime()) && due < today)
+    .sort((a, b) => a.due - b.due);
+  overdue.slice(0, 2).forEach(({ card }) => {
+    addStep(card, 'Overdue Task', `This task passed its due date (${card.dueDate}). Consider re-prioritizing or splitting the remaining work.`);
+  });
+
+  const urgentUnassigned = openCards
+    .filter((c) => String(c?.priority || '').toLowerCase() === 'urgent' && (!Array.isArray(c.assignees) || c.assignees.length === 0));
+  urgentUnassigned.slice(0, 1).forEach((card) => {
+    addStep(card, 'Urgent But Unassigned', 'This urgent task has no owner. Assigning someone now will reduce execution risk.');
+  });
+
+  const dueSoonLarge = openCards
+    .filter((c) => c?.dueDate)
+    .map((c) => ({ card: c, due: new Date(`${c.dueDate}T00:00:00`) }))
+    .filter(({ card, due }) => !Number.isNaN(due.getTime()) && due <= in3Days && (Array.isArray(card.subtasks) ? card.subtasks.filter((s) => !s.completed).length : 0) >= 3)
+    .sort((a, b) => a.due - b.due);
+  dueSoonLarge.slice(0, 1).forEach(({ card }) => {
+    const openSubtasks = Array.isArray(card.subtasks) ? card.subtasks.filter((s) => !s.completed).length : 0;
+    addStep(card, 'Heavy Due-Soon Card', `Due in <=3 days with ${openSubtasks} open subtasks. You may want to trim scope or delegate.`);
+  });
+
+  const staleInProgress = openCards
+    .map((card) => ({ card, updated: _toCardDate(card?.updatedAt) }))
+    .filter(({ updated }) => updated)
+    .sort((a, b) => a.updated - b.updated);
+  staleInProgress.slice(0, 1).forEach(({ card, updated }) => {
+    const days = Math.max(1, Math.round((Date.now() - updated.getTime()) / 86400000));
+    addStep(card, 'Potentially Stale', `No recent update for about ${days} day${days === 1 ? '' : 's'}. Quick status check might help.`);
+  });
+
+  const workload = new Map();
+  openCards.forEach((card) => {
+    const owners = Array.isArray(card.assignees) && card.assignees.length ? card.assignees : [];
+    owners.forEach((uid) => {
+      workload.set(uid, (workload.get(uid) || 0) + 1);
+    });
+  });
+  const overloadedUid = [...workload.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  if (overloadedUid && (workload.get(overloadedUid) || 0) >= 4) {
+    const overloadedCard = openCards.find((c) => Array.isArray(c.assignees) && c.assignees.includes(overloadedUid));
+    if (overloadedCard) {
+      const member = memberByUid.get(overloadedUid);
+      const ownerName = member?.displayName || member?.username || 'this teammate';
+      addStep(overloadedCard, 'Workload Hotspot', `${ownerName} has several open tasks. Rebalancing could smooth delivery.`);
+    }
+  }
+
+  return steps.slice(0, 6);
+}
+
+function _setDirectInsightsButtonState(running) {
+  const btn = document.getElementById('ai-direct-insights-btn');
+  if (!btn) return;
+  btn.textContent = running ? 'Stop Insights' : 'AI Direct Insights';
+  btn.classList.toggle('bg-violet-200', running);
+  btn.classList.toggle('border-violet-500', running);
+}
+
+function _clearDirectInsightsFocus() {
+  document.querySelectorAll('.ai-direct-insight-focus').forEach((el) => el.classList.remove('ai-direct-insight-focus'));
+}
+
+function _stopDirectInsightsTour({ silent = false } = {}) {
+  if (_directInsightsState.timer) {
+    clearTimeout(_directInsightsState.timer);
+    _directInsightsState.timer = null;
+  }
+  _clearDirectInsightsFocus();
+  _directInsightsState.running = false;
+  _directInsightsState.steps = [];
+  _directInsightsState.index = 0;
+  if (_directInsightsState.tooltipEl) {
+    _directInsightsState.tooltipEl.remove();
+    _directInsightsState.tooltipEl = null;
+  }
+  _setDirectInsightsButtonState(false);
+  if (!silent) {
+    const marker = document.getElementById('board-filter-count');
+    if (marker) {
+      marker.textContent = 'AI Direct Insights tour ended';
+      marker.classList.remove('hidden');
+      setTimeout(() => {
+        if (marker.textContent === 'AI Direct Insights tour ended') marker.classList.add('hidden');
+      }, 1700);
+    }
+  }
+}
+
+function _showDirectInsightStep(index) {
+  if (!_directInsightsState.running) return;
+  if (!_directInsightsState.steps.length) {
+    _stopDirectInsightsTour({ silent: true });
+    return;
+  }
+  if (index < 0 || index >= _directInsightsState.steps.length) {
+    _stopDirectInsightsTour({ silent: true });
+    return;
+  }
+
+  if (_directInsightsState.timer) {
+    clearTimeout(_directInsightsState.timer);
+    _directInsightsState.timer = null;
+  }
+
+  const step = _directInsightsState.steps[index];
+  const cardEl = document.querySelector(`.card[data-card-id="${step.cardId}"]`);
+  if (!cardEl) {
+    const nextIndex = index + 1;
+    if (nextIndex < _directInsightsState.steps.length) _showDirectInsightStep(nextIndex);
+    else _stopDirectInsightsTour({ silent: true });
+    return;
+  }
+
+  _directInsightsState.index = index;
+  _clearDirectInsightsFocus();
+  cardEl.classList.add('ai-direct-insight-focus');
+  cardEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+
+  let tooltip = _directInsightsState.tooltipEl;
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'ai-direct-insights-tooltip';
+    tooltip.className = 'ai-direct-insights-tooltip';
+    document.body.appendChild(tooltip);
+    _directInsightsState.tooltipEl = tooltip;
+  }
+
+  const isLast = index >= _directInsightsState.steps.length - 1;
+  tooltip.innerHTML = `
+    <p class="ai-direct-insights-kicker">AI Direct Insights • ${index + 1}/${_directInsightsState.steps.length}</p>
+    <p class="ai-direct-insights-title">${_escHtml(step.title)}</p>
+    <p class="ai-direct-insights-body">${_escHtml(step.detail)}</p>
+    <div class="ai-direct-insights-actions">
+      <button type="button" class="ai-direct-insights-stop">Stop</button>
+      <button type="button" class="ai-direct-insights-next">${isLast ? 'Finish' : 'Next'}</button>
+    </div>
+  `;
+
+  const placeTooltip = () => {
+    const rect = cardEl.getBoundingClientRect();
+    const pad = 14;
+    const tooltipRect = tooltip.getBoundingClientRect();
+    let top = rect.top + (rect.height / 2) - (tooltipRect.height / 2);
+    top = Math.max(12, Math.min(window.innerHeight - tooltipRect.height - 12, top));
+    let left = rect.right + pad;
+    if (left + tooltipRect.width > window.innerWidth - 12) {
+      left = rect.left - tooltipRect.width - pad;
+    }
+    if (left < 12) left = 12;
+    tooltip.style.top = `${Math.round(top)}px`;
+    tooltip.style.left = `${Math.round(left)}px`;
+  };
+
+  tooltip.querySelector('.ai-direct-insights-stop')?.addEventListener('click', () => _stopDirectInsightsTour());
+  tooltip.querySelector('.ai-direct-insights-next')?.addEventListener('click', () => {
+    if (isLast) _stopDirectInsightsTour({ silent: true });
+    else _showDirectInsightStep(index + 1);
+  });
+
+  requestAnimationFrame(() => {
+    placeTooltip();
+    setTimeout(placeTooltip, 260);
+  });
+
+  if (!isLast) {
+    _directInsightsState.timer = setTimeout(() => {
+      _showDirectInsightStep(index + 1);
+    }, 3600);
+  }
+}
+
+function _startDirectInsightsTour() {
+  if (_directInsightsState.running) {
+    _stopDirectInsightsTour({ silent: true });
+    return;
+  }
+
+  if (_boardViewMode !== 'kanban') _applyBoardView('kanban');
+
+  const cards = getCardsSnapshot();
+  const steps = _collectDirectInsightSteps(cards);
+  if (!steps.length) {
+    const marker = document.getElementById('board-filter-count');
+    if (marker) {
+      marker.textContent = 'No urgent insights right now. Board looks healthy.';
+      marker.classList.remove('hidden');
+      setTimeout(() => {
+        if (marker.textContent === 'No urgent insights right now. Board looks healthy.') marker.classList.add('hidden');
+      }, 2200);
+    }
+    return;
+  }
+
+  _directInsightsState.running = true;
+  _directInsightsState.steps = steps;
+  _directInsightsState.index = 0;
+  _setDirectInsightsButtonState(true);
+  _showDirectInsightStep(0);
 }
 
 function _openAiDashboardPage() {
@@ -938,6 +1194,7 @@ document.getElementById('board-kanban-view-btn')?.addEventListener('click', () =
 document.getElementById('board-list-view-btn')?.addEventListener('click', () => _applyBoardView('list'));
 document.getElementById('board-calendar-view-btn')?.addEventListener('click', () => _applyBoardView('calendar'));
 document.getElementById('ai-dashboard-btn')?.addEventListener('click', () => _openAiDashboardPage());
+document.getElementById('ai-direct-insights-btn')?.addEventListener('click', () => _startDirectInsightsTour());
 document.getElementById('back-to-board-from-ai-dashboard')?.addEventListener('click', () => {
   setAiChatMode('board');
   _showView('board');
@@ -1535,6 +1792,176 @@ async function _openTimelineModal() {
 
 function _escHtml(str) {
   return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+function _subscribeToNotifications(uid) {
+  if (_unsubNotifications) { _unsubNotifications(); _unsubNotifications = null; }
+  const q = query(
+    collection(db, 'notifications', uid, 'items'),
+    orderBy('createdAt', 'desc'),
+    limit(30),
+  );
+  _unsubNotifications = onSnapshot(q, (snap) => {
+    _notifItems = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    _renderNotificationBadge();
+    _renderNotificationList();
+  }, (err) => {
+    console.warn('Notifications snapshot error:', err.message);
+  });
+}
+
+function _renderNotificationBadge() {
+  const unread = _notifItems.filter((n) => !n.read).length;
+  const badge = document.getElementById('notif-badge');
+  const boardBadges = document.querySelectorAll('.notif-badge-board');
+  const display = unread === 0 ? 'none' : '';
+  const label = unread > 9 ? '9+' : String(unread);
+  if (badge) { badge.textContent = label; badge.style.display = display; }
+  boardBadges.forEach((b) => { b.textContent = label; b.style.display = display; });
+}
+
+function _renderNotificationList() {
+  const list = document.getElementById('notifications-list');
+  if (!list) return;
+  if (_notifItems.length === 0) {
+    list.innerHTML = '<p class="px-4 py-6 text-sm text-center text-gray-400">No notifications yet.</p>';
+    return;
+  }
+  list.innerHTML = _notifItems.map((n) => {
+    const ts = n.createdAt?.toDate?.() || null;
+    const timeLabel = ts ? _relativeTime(ts) : '';
+    return `
+      <div class="flex items-start gap-3 px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${n.read ? '' : 'bg-blue-50/40'}"
+           data-notif-id="${n.id}">
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium text-gray-800 truncate">${_escHtml(n.title || '')}</p>
+          <p class="text-xs text-gray-500 mt-0.5">${_escHtml(n.body || '')}</p>
+          ${timeLabel ? `<p class="text-[11px] text-gray-400 mt-1">${timeLabel}</p>` : ''}
+        </div>
+        ${!n.read ? '<div class="w-2 h-2 bg-blue-500 rounded-full mt-1.5 flex-shrink-0"></div>' : ''}
+      </div>`;
+  }).join('');
+
+  list.querySelectorAll('[data-notif-id]').forEach((el) => {
+    el.addEventListener('click', () => _markNotifRead(el.dataset.notifId));
+  });
+}
+
+async function _markNotifRead(notifId) {
+  if (!_user) return;
+  const item = _notifItems.find((n) => n.id === notifId);
+  if (!item || item.read) return;
+  try {
+    await updateDoc(doc(db, 'notifications', _user.uid, 'items', notifId), { read: true });
+  } catch (err) {
+    console.warn('markNotifRead failed:', err.message);
+  }
+}
+
+async function _markAllNotifsRead() {
+  if (!_user) return;
+  const unread = _notifItems.filter((n) => !n.read);
+  await Promise.all(unread.map((n) =>
+    updateDoc(doc(db, 'notifications', _user.uid, 'items', n.id), { read: true }).catch(() => {}),
+  ));
+}
+
+function _relativeTime(date) {
+  const diff = Math.round((Date.now() - date.getTime()) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function _toggleNotificationsPanel() {
+  const panel = document.getElementById('notifications-panel');
+  if (!panel) return;
+  const hidden = panel.classList.toggle('hidden');
+  if (!hidden) _renderNotificationList();
+}
+
+// Wire up notification bell buttons (called after DOM ready)
+document.getElementById('notifications-btn-boards')?.addEventListener('click', _toggleNotificationsPanel);
+document.getElementById('notifications-btn-board')?.addEventListener('click', _toggleNotificationsPanel);
+document.getElementById('notifications-mark-all-read')?.addEventListener('click', async () => {
+  await _markAllNotifsRead();
+});
+
+// Close panel when clicking outside
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('notifications-panel');
+  if (!panel || panel.classList.contains('hidden')) return;
+  if (!panel.contains(e.target)
+      && e.target.id !== 'notifications-btn-boards'
+      && e.target.id !== 'notifications-btn-board'
+      && !e.target.closest('#notifications-btn-boards')
+      && !e.target.closest('#notifications-btn-board')) {
+    panel.classList.add('hidden');
+  }
+});
+
+// ─── Invite acceptance ────────────────────────────────────────────────────────
+
+function _checkInviteParams() {
+  const params = new URLSearchParams(window.location.search);
+  const inviteId = params.get('inviteId');
+  const inviteToken = params.get('inviteToken');
+  if (!inviteId || !inviteToken) return;
+
+  // Clean URL immediately
+  const url = new URL(window.location.href);
+  url.searchParams.delete('inviteId');
+  url.searchParams.delete('inviteToken');
+  window.history.replaceState({}, '', url.toString());
+
+  _pendingInviteId = inviteId;
+  _pendingInviteToken = inviteToken;
+  _showInviteBanner(inviteId, inviteToken);
+}
+
+async function _showInviteBanner(inviteId, inviteToken) {
+  const banner = document.getElementById('invite-banner');
+  const content = document.getElementById('invite-banner-content');
+  const acceptBtn = document.getElementById('invite-accept-btn');
+  const dismissBtn = document.getElementById('invite-dismiss-btn');
+  if (!banner || !content) return;
+
+  content.textContent = 'Loading invite details…';
+  banner.classList.remove('hidden');
+
+  try {
+    const preview = await getOrgInvitePreview(inviteId, inviteToken);
+    const roleLabel = preview.role === 'read-only' ? 'Read-only' : preview.role === 'admin' ? 'Org Admin' : 'Collaborator';
+    content.textContent = `You've been invited to join "${preview.orgName}" as ${roleLabel}${preview.inviterName ? ` by ${preview.inviterName}` : ''}.`;
+  } catch (err) {
+    content.textContent = err.message || 'Invite link is invalid or expired.';
+    if (acceptBtn) acceptBtn.style.display = 'none';
+    return;
+  }
+
+  acceptBtn?.addEventListener('click', async () => {
+    if (acceptBtn) acceptBtn.disabled = true;
+    try {
+      const result = await acceptOrgInvite(inviteId, inviteToken);
+      banner.classList.add('hidden');
+      _pendingInviteId = null;
+      _pendingInviteToken = null;
+      content.textContent = `Joined "${result.orgName}"!`;
+      await _openOrganizationsPage();
+    } catch (err) {
+      content.textContent = err.message || 'Could not accept invite.';
+      if (acceptBtn) acceptBtn.disabled = false;
+    }
+  }, { once: true });
+
+  dismissBtn?.addEventListener('click', () => {
+    banner.classList.add('hidden');
+    _pendingInviteId = null;
+    _pendingInviteToken = null;
+  }, { once: true });
 }
 
 document.getElementById('create-card-top-btn')?.addEventListener('click', () => {
@@ -2746,6 +3173,15 @@ async function _openOrganizationsPage(preferredOrgId = null) {
                 <p class="text-xs text-gray-500">When enabled, organization members can use AI Dealer features</p>
               </span>
             </label>
+            ${isOwner ? `
+            <div class="pt-2 border-t border-gray-100">
+              <button id="org-transfer-owner-btn" type="button"
+                class="px-3 py-1.5 text-xs font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg transition-colors">
+                Transfer ownership
+              </button>
+              <p class="mt-1 text-[11px] text-gray-500">Transfers owner privileges and billing responsibility for this organization.</p>
+            </div>
+            ` : ''}
           </div>
           <p id="org-ai-error" class="hidden mt-2 text-xs text-red-600"></p>
           <p id="org-ai-success" class="hidden mt-2 text-xs text-emerald-700"></p>
@@ -2778,11 +3214,29 @@ async function _openOrganizationsPage(preferredOrgId = null) {
                 </select>
                 <button type="submit" class="w-full px-3 py-2 text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 rounded-lg">Send invite email</button>
               </form>
-              <p class="mt-1 text-xs text-gray-500">Opens your email app with a prefilled invite message and join link.</p>
+              <div id="org-invite-link-container" class="hidden mt-2 space-y-1">
+                <p class="text-xs font-semibold text-gray-600">Invite link (copy &amp; share)</p>
+                <div class="flex gap-1">
+                  <input id="org-invite-link-input" type="text" readonly
+                    class="flex-1 min-w-0 rounded-lg border-gray-300 text-xs bg-gray-50 focus:ring-brand-500 focus:border-brand-500" />
+                  <button type="button" id="org-invite-link-copy"
+                    class="flex-shrink-0 px-2 py-1 text-xs font-medium text-white bg-brand-500 hover:bg-brand-600 rounded-lg transition-colors">Copy</button>
+                </div>
+              </div>
+              <p class="mt-1 text-xs text-gray-500">Creates a secure 7-day invite link and opens your email app.</p>
             </div>
           </div>
           <p id="org-settings-error" class="hidden mt-2 text-xs text-red-600"></p>
           <p id="org-settings-success" class="hidden mt-2 text-xs text-emerald-700"></p>
+        </section>
+        ` : ''}
+
+        ${isOrgAdmin ? `
+        <section class="xl:col-span-3 rounded-xl border border-gray-200 bg-white p-5">
+          <h3 class="text-sm font-semibold text-gray-800 mb-3">Activity Log</h3>
+          <div id="org-activity-log-root" class="space-y-0 divide-y divide-gray-50">
+            <p class="text-xs text-gray-400">Loading…</p>
+          </div>
         </section>
         ` : ''}
       </div>
@@ -2806,7 +3260,7 @@ async function _openOrganizationsPage(preferredOrgId = null) {
       return;
     }
     try {
-      await addMemberByUsername(selectedOrg.id, username, selectedOrg.id);
+      await addMemberByUsername(selectedOrg.id, username);
       await _openOrganizationsPage(selectedOrg.id);
     } catch (err) {
       errorEl.textContent = err.message || 'Could not add member.';
@@ -2823,34 +3277,47 @@ async function _openOrganizationsPage(preferredOrgId = null) {
     const role = (document.getElementById('org-invite-role')?.value || 'collaborator').trim().toLowerCase();
     const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     if (!validEmail) {
-      errorEl.textContent = 'Enter a valid email address.';
-      errorEl.classList.remove('hidden');
+      if (errorEl) { errorEl.textContent = 'Enter a valid email address.'; errorEl.classList.remove('hidden'); }
       return;
     }
 
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+
     try {
+      const { inviteId, token } = await createOrgInvite(selectedOrg.id, email, role);
       const baseUrl = `${window.location.origin}${window.location.pathname}`;
-      const inviteUrl = `${baseUrl}?orgInvite=1&orgId=${encodeURIComponent(selectedOrg.id)}&role=${encodeURIComponent(role)}`;
+      const inviteUrl = `${baseUrl}?inviteId=${encodeURIComponent(inviteId)}&inviteToken=${encodeURIComponent(token)}`;
+
+      // Show copy-able link and optional mailto
+      const linkContainer = document.getElementById('org-invite-link-container');
+      const linkInput = document.getElementById('org-invite-link-input');
+      if (linkContainer && linkInput) {
+        linkInput.value = inviteUrl;
+        linkContainer.classList.remove('hidden');
+      }
+
       const roleLabel = role === 'read-only' ? 'Read-only' : (role === 'admin' ? 'Org Admin' : 'Collaborator');
-      const subject = `Invitation to join ${selectedOrg.name} on PMDeck`;
+      const subject = `Invitation to join ${selectedOrg.name} on PMDecks`;
       const body = [
         `Hi,`,
         ``,
-        `${_userProfile?.displayName || _user?.email || 'A PMDeck user'} invited you to join the organization "${selectedOrg.name}" as ${roleLabel}.`,
+        `${_userProfile?.displayName || _user?.email || 'A PMDecks user'} invited you to join the organization "${selectedOrg.name}" as ${roleLabel}.`,
         ``,
-        `Join link: ${inviteUrl}`,
+        `Accept your invite: ${inviteUrl}`,
         ``,
-        `If you do not have an account yet, sign up first, then open the link again.`,
+        `This link expires in 7 days. If you don't have an account yet, sign up first, then open the link.`,
       ].join('\n');
-
       window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
       if (successEl) {
-        successEl.textContent = 'Email draft opened. Send it to deliver the invite link.';
+        successEl.textContent = 'Invite link created. Email draft opened — send it to deliver the invite.';
         successEl.classList.remove('hidden');
       }
     } catch (err) {
-      errorEl.textContent = err.message || 'Could not prepare invite email.';
-      errorEl.classList.remove('hidden');
+      if (errorEl) { errorEl.textContent = err.message || 'Could not create invite.'; errorEl.classList.remove('hidden'); }
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
 
@@ -2886,6 +3353,70 @@ async function _openOrganizationsPage(preferredOrgId = null) {
     });
   });
 
+  document.getElementById('org-transfer-owner-btn')?.addEventListener('click', () => {
+    const modalRoot = document.getElementById('modal-root');
+    const candidates = members.filter((m) => m.uid !== selectedOrg.ownerId);
+    if (!candidates.length) {
+      if (errorEl) {
+        errorEl.textContent = 'Add another member before transferring ownership.';
+        errorEl.classList.remove('hidden');
+      }
+      return;
+    }
+
+    modalRoot.innerHTML = `
+      <div class="modal-backdrop fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+          <h3 class="text-base font-semibold text-gray-800 mb-2">Transfer Organization Ownership</h3>
+          <p class="text-xs text-gray-500 mb-3">Select a new owner. You will become an Org Admin.</p>
+          <select id="org-transfer-owner-select" class="w-full rounded-lg border-gray-300 text-sm focus:ring-brand-500 focus:border-brand-500 mb-4">
+            ${candidates.map((m) => {
+              const label = m.displayName ? `${m.displayName} (@${m.username || ''})` : `@${m.username || m.uid}`;
+              return `<option value="${_escHtml(m.uid)}">${_escHtml(label)}</option>`;
+            }).join('')}
+          </select>
+          <p id="org-transfer-owner-error" class="hidden mb-3 text-xs text-red-600"></p>
+          <div class="flex justify-end gap-2">
+            <button id="org-transfer-owner-cancel" type="button" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 rounded-lg hover:bg-gray-100 transition-colors">Cancel</button>
+            <button id="org-transfer-owner-confirm" type="button" class="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors">Transfer</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const closeModal = () => { modalRoot.innerHTML = ''; };
+    document.getElementById('org-transfer-owner-cancel')?.addEventListener('click', closeModal);
+    modalRoot.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeModal();
+    });
+
+    document.getElementById('org-transfer-owner-confirm')?.addEventListener('click', async () => {
+      const nextOwnerUid = document.getElementById('org-transfer-owner-select')?.value || '';
+      const transferErrEl = document.getElementById('org-transfer-owner-error');
+      if (!nextOwnerUid) return;
+      try {
+        await transferOrgOwnership(selectedOrg.id, nextOwnerUid);
+        closeModal();
+        await _openOrganizationsPage(selectedOrg.id);
+      } catch (err) {
+        if (transferErrEl) {
+          transferErrEl.textContent = err.message || 'Could not transfer ownership.';
+          transferErrEl.classList.remove('hidden');
+        }
+      }
+    });
+  });
+
+  // Copy invite link button
+  document.getElementById('org-invite-link-copy')?.addEventListener('click', () => {
+    const input = document.getElementById('org-invite-link-input');
+    if (!input) return;
+    input.select();
+    navigator.clipboard?.writeText(input.value).catch(() => document.execCommand('copy'));
+    const btn = document.getElementById('org-invite-link-copy');
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 2000); }
+  });
+
   // AI usage setting toggle
   const aiErrorEl = document.getElementById('org-ai-error');
   const aiSuccessEl = document.getElementById('org-ai-success');
@@ -2907,6 +3438,89 @@ async function _openOrganizationsPage(preferredOrgId = null) {
       e.target.checked = !e.target.checked;
     }
   });
+
+  // Load and render org activity log for owners/admins
+  if (isOrgAdmin) {
+    _loadOrgActivityLog(selectedOrg.id);
+  }
+}
+
+async function _loadOrgActivityLog(orgId) {
+  const container = document.getElementById('org-activity-log-root');
+  if (!container) return;
+  container.innerHTML = '<p class="text-xs text-gray-400">Loading activity…</p>';
+
+  try {
+    const { getDocs, collection: col, query: q, orderBy: ob, limit: lim } = await import('firebase/firestore');
+    const orgMembers = await getOrgMembers(orgId).catch(() => []);
+    const memberByUid = new Map((orgMembers || []).map((m) => [m.uid, m]));
+    const roleLabel = (role) => {
+      const normalized = String(role || '').toLowerCase();
+      if (normalized === 'read-only') return 'Read-only';
+      if (normalized === 'admin') return 'Org Admin';
+      if (normalized === 'collaborator') return 'Collaborator';
+      return role || '';
+    };
+    const personLabel = (uid, username = '', email = '') => {
+      if (username) return `@${username}`;
+      const profile = memberByUid.get(uid);
+      if (profile?.username) return `@${profile.username}`;
+      if (profile?.displayName) return profile.displayName;
+      if (profile?.email) return profile.email;
+      if (email) return email;
+      return uid ? `${uid.slice(0, 8)}…` : 'Unknown user';
+    };
+
+    const snap = await getDocs(q(col(db, 'organizations', orgId, 'activityLog'), ob('createdAt', 'desc'), lim(20)));
+    if (snap.empty) {
+      container.innerHTML = '<p class="text-xs text-gray-400">No activity recorded yet.</p>';
+      return;
+    }
+
+    const typeLabel = {
+      member_added: 'Added member',
+      member_removed: 'Removed member',
+      role_changed: 'Changed role',
+      owner_transferred: 'Transferred ownership',
+      invite_sent: 'Sent invite',
+      invite_accepted: 'Invite accepted',
+    };
+
+    container.innerHTML = snap.docs.map((d) => {
+      const ev = d.data();
+      const ts = ev.createdAt?.toDate?.() || null;
+      const label = typeLabel[ev.type] || ev.type;
+      const actor = personLabel(ev.actorUid);
+      const target = personLabel(ev.targetUid, ev.targetUsername, ev.email);
+      let detail = '';
+      if (ev.type === 'role_changed') {
+        const fromRole = roleLabel(ev.oldRole);
+        const toRole = roleLabel(ev.newRole || ev.role);
+        detail = fromRole && toRole
+          ? `${target} ${fromRole} → ${toRole}`
+          : `${target} → ${toRole || roleLabel(ev.role)}`;
+      } else if (ev.type === 'owner_transferred') {
+        const prevOwner = personLabel(ev.previousOwnerUid);
+        detail = `${prevOwner} → ${target}`;
+      } else if (ev.type === 'member_added' || ev.type === 'member_removed') {
+        detail = target;
+      } else if (ev.type === 'invite_sent' || ev.type === 'invite_accepted') {
+        detail = target;
+      } else if (target && target !== 'Unknown user') {
+        detail = target;
+      }
+      return `<div class="flex items-start justify-between py-1.5 border-b border-gray-50 last:border-0 gap-2">
+        <div class="min-w-0">
+          <span class="text-xs font-medium text-gray-700">${_escHtml(label)}</span>
+          ${detail ? `<span class="text-xs text-gray-500 ml-1">${_escHtml(detail)}</span>` : ''}
+          ${actor ? `<div class="text-[11px] text-gray-400 mt-0.5">by ${_escHtml(actor)}</div>` : ''}
+        </div>
+        ${ts ? `<span class="text-[11px] text-gray-400 flex-shrink-0">${_relativeTime(ts)}</span>` : ''}
+      </div>`;
+    }).join('');
+  } catch (err) {
+    container.innerHTML = `<p class="text-xs text-red-500">${_escHtml(err.message || 'Could not load activity.')}</p>`;
+  }
 }
 
 // ─── Admin panel: dependency list ─────────────────────────────────────────────
@@ -3391,6 +4005,9 @@ const _viewDisplayMap = {
 };
 
 function _showView(name) {
+  if (name !== 'board' && _directInsightsState.running) {
+    _stopDirectInsightsTour({ silent: true });
+  }
   _activeViewName = name;
   Object.entries(_views).forEach(([key, el]) => {
     if (!el) return;

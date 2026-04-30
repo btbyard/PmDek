@@ -18,7 +18,6 @@
 import {
   collection,
   doc,
-  addDoc,
   updateDoc,
   deleteDoc,
   query,
@@ -31,8 +30,9 @@ import {
   getDoc,
   serverTimestamp,
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 
-import { db } from './firebase.js';
+import { db, functions } from './firebase.js';
 import { reRenderCards, updateAllCardsBackground } from './cards.js';
 import { getUserProfile } from './users.js';
 import { canCreateDeck, assertProjectTypeAllowed } from './billing.js';
@@ -211,27 +211,32 @@ export function setBoardId(id) {
  * @returns {Promise<string>} boardId
  */
 export async function createBoard(user, title = 'My Board', columns = DEFAULT_COLUMNS, dueDate = null, color = null, projectType = 'standard', { visibility = 'private', orgId = null, assignedMembers = [], projectDeckOwnerId = null } = {}) {
+  // Keep client-side checks for instant UX messaging, while server function
+  // remains the source of truth for all plan and org enforcement.
   const deckGate = await canCreateDeck(user.uid);
   if (!deckGate.allowed) {
     throw new Error(`Deck limit reached for ${deckGate.plan.label} (${deckGate.limit}).`);
   }
   await assertProjectTypeAllowed(user.uid, projectType || 'standard');
 
-  const ref = await addDoc(collection(db, 'boards'), {
-    userId:    user.uid,
-    title:     title.trim() || 'My Board',
-    columns:   columns,
-    dueDate:   dueDate || null,
-    color:     color || null,
+  const createBoardFn = httpsCallable(functions, 'createBoard');
+  const result = await createBoardFn({
+    title: title.trim() || 'My Board',
+    columns,
+    dueDate: dueDate || null,
+    color: color || null,
     projectType: projectType || 'standard',
-    visibility:      visibility || 'private',
-    orgId:           orgId || null,
+    visibility: visibility || 'private',
+    orgId: orgId || null,
     assignedMembers: Array.isArray(assignedMembers) ? assignedMembers : [],
-    stickyNotes: [],
     projectDeckOwnerId: visibility === 'org' ? (projectDeckOwnerId || user.uid || null) : null,
-    createdAt: serverTimestamp(),
   });
-  return ref.id;
+
+  const boardId = result?.data?.boardId;
+  if (!boardId || typeof boardId !== 'string') {
+    throw new Error('Board creation failed: missing board ID from server.');
+  }
+  return boardId;
 }
 
 /**
@@ -827,6 +832,72 @@ function _buildStickyNotesLane(board) {
   let workingNotes = [...notes];
   const isOrgBoard = Boolean(board.orgId);
   let saveTimer = null;
+  const noteAuthorCache = new Map();
+  const noteAuthorInFlight = new Map();
+
+  const _applyAuthorAvatar = (avatarEl, uid, profile) => {
+    if (!avatarEl) return;
+    if (!profile) {
+      avatarEl.textContent = '?';
+      avatarEl.title = uid || 'Unknown user';
+      return;
+    }
+
+    if (profile.photoURL) {
+      avatarEl.innerHTML = '';
+      avatarEl.style.background = '';
+      const img = document.createElement('img');
+      img.src = profile.photoURL;
+      img.alt = profile.displayName || '';
+      img.title = profile.displayName || profile.email || '';
+      img.className = 'w-5 h-5 rounded-full object-cover border border-gray-200';
+      avatarEl.appendChild(img);
+      return;
+    }
+
+    const initials = (profile.displayName || profile.username || '?')
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((w) => w[0])
+      .join('')
+      .toUpperCase();
+    avatarEl.textContent = initials || '?';
+    avatarEl.title = profile.displayName || profile.email || uid || '';
+  };
+
+  const _ensureAuthorProfile = (uid, avatarEl) => {
+    if (!uid) return;
+
+    if (noteAuthorCache.has(uid)) {
+      _applyAuthorAvatar(avatarEl, uid, noteAuthorCache.get(uid));
+      return;
+    }
+
+    avatarEl.textContent = '…';
+    avatarEl.title = 'Loading user';
+
+    const inFlight = noteAuthorInFlight.get(uid);
+    if (inFlight) {
+      inFlight.then((profile) => _applyAuthorAvatar(avatarEl, uid, profile));
+      return;
+    }
+
+    const loadPromise = getUserProfile(uid)
+      .then((profile) => {
+        const safeProfile = profile || null;
+        noteAuthorCache.set(uid, safeProfile);
+        noteAuthorInFlight.delete(uid);
+        return safeProfile;
+      })
+      .catch(() => {
+        noteAuthorCache.set(uid, null);
+        noteAuthorInFlight.delete(uid);
+        return null;
+      });
+
+    noteAuthorInFlight.set(uid, loadPromise);
+    loadPromise.then((profile) => _applyAuthorAvatar(avatarEl, uid, profile));
+  };
 
   const queueSave = () => {
     if (saveTimer) window.clearTimeout(saveTimer);
@@ -849,126 +920,151 @@ function _buildStickyNotesLane(board) {
   // Alternating slight horizontal offsets for scattered-desk feel (no rotation — breaks caret)
   const OFFSETS = ['0px', '2px', '-1px', '3px', '-2px'];
 
-  const renderNotes = () => {
-    notesWrap.innerHTML = '';
-    stackViewport.innerHTML = '';
+  const _createNoteCard = (note) => {
+    const card = document.createElement('article');
+    card.dataset.stickyNoteId = note.id;
 
+    // ── Delete × ────────────────────────────────────────────────────────
+    const deleteIcon = document.createElement('button');
+    deleteIcon.type = 'button';
+    deleteIcon.title = 'Delete note';
+    deleteIcon.className = [
+      'sticky-delete-btn absolute top-1.5 right-1.5',
+      'w-5 h-5 flex items-center justify-center rounded',
+      'text-amber-700/60 hover:text-red-600 hover:bg-red-100/70',
+      'opacity-0 transition-all duration-100',
+    ].join(' ');
+    deleteIcon.innerHTML = `<svg class="w-3 h-3 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/>
+    </svg>`;
+    deleteIcon.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const noteId = card.dataset.stickyNoteId;
+      workingNotes = workingNotes.filter((n) => n.id !== noteId);
+      renderNotes();
+      queueSave();
+    });
+
+    // ── Fold corner ──────────────────────────────────────────────────────
+    const fold = document.createElement('div');
+    fold.className = 'sticky-fold-corner pointer-events-none';
+    card.appendChild(fold);
+    card.appendChild(deleteIcon);
+
+    card.addEventListener('mouseenter', () => deleteIcon.classList.remove('opacity-0'));
+    card.addEventListener('mouseleave', () => deleteIcon.classList.add('opacity-0'));
+    card.addEventListener('click', (e) => {
+      if (e.target !== deleteIcon && !deleteIcon.contains(e.target)) {
+        card.querySelector('.sticky-note-body')?.focus();
+      }
+    });
+
+    // ── Creator avatar (org boards only) ─────────────────────────────────
+    let avatarEl = null;
+    if (isOrgBoard && note.createdBy) {
+      avatarEl = document.createElement('div');
+      avatarEl.className = 'sticky-note-avatar w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0';
+      avatarEl.style.background = _uidToColor(note.createdBy);
+      _ensureAuthorProfile(note.createdBy, avatarEl);
+    }
+
+    // ── Editable textarea (all notes editable) ───────────────────────────
+    const bodyInput = document.createElement('textarea');
+    bodyInput.rows = 3;
+    bodyInput.maxLength = 1200;
+    bodyInput.placeholder = 'Write a quick note...';
+    bodyInput.className = 'sticky-note-body flex-1 min-w-0 text-xs placeholder-amber-700/60 border-0 outline-none p-1 resize-none focus:ring-0 cursor-text';
+    bodyInput.value = note.body;
+    bodyInput.dataset.stickyNoteBodyId = note.id;
+    bodyInput.style.overflowY = 'hidden';
+    bodyInput.style.caretColor = '#000';
+    bodyInput.style.color = '#3b1a08';
+    bodyInput.style.backgroundColor = 'transparent';
+    bodyInput.style.webkitTextFillColor = '#3b1a08';
+    bodyInput.addEventListener('input', () => {
+      const noteId = bodyInput.dataset.stickyNoteBodyId;
+      const target = workingNotes.find((n) => n.id === noteId);
+      if (target) {
+        target.body = bodyInput.value;
+        target.updatedAt = Date.now();
+      }
+      // Grow textarea without collapsing height first (avoids killing caret).
+      const sh = bodyInput.scrollHeight;
+      if (bodyInput.offsetHeight < sh) {
+        bodyInput.style.height = `${sh}px`;
+      }
+      queueSave();
+    });
+
+    if (avatarEl) {
+      const row = document.createElement('div');
+      row.className = 'flex items-start gap-1.5';
+      row.appendChild(avatarEl);
+      row.appendChild(bodyInput);
+      card.appendChild(row);
+    } else {
+      card.appendChild(bodyInput);
+    }
+
+    return card;
+  };
+
+  const renderNotes = () => {
     if (workingNotes.length === 0) {
       lane.style.width = '';
+      stackViewport.replaceChildren();
+      if (!notesWrap.contains(stackViewport)) notesWrap.appendChild(stackViewport);
+      _syncMobileNotesDrawer();
       return;
     }
     lane.style.width = '15rem';
 
+    const existingById = new Map(
+      [...stackViewport.querySelectorAll('article[data-sticky-note-id]')]
+        .map((el) => [el.dataset.stickyNoteId, el])
+    );
+    const desiredIds = new Set();
+    let prevCard = null;
+
     // Render oldest first so the most recent note ends up at the bottom on top.
     [...workingNotes].reverse().forEach((note, idx) => {
-      const card = document.createElement('article');
+      desiredIds.add(note.id);
+      let card = existingById.get(note.id);
+      if (!card) card = _createNoteCard(note);
+
+      card.dataset.stickyNoteId = note.id;
       card.className = [
         'sticky-stack-card relative border border-amber-400/60 p-3 shadow-md cursor-text',
-        idx > 0 ? '-mt-3' : '',   // overlap = bottom padding only, so all note text stays visible
+        idx > 0 ? '-mt-3' : '',
       ].join(' ');
-      // Ascending z-index: cards lower on screen sit on top of those above
       card.style.zIndex = String(idx + 1);
       card.style.background = note.color;
       card.style.backgroundImage = `repeating-linear-gradient(transparent, transparent 20px, rgba(180,140,30,0.10) 20px, rgba(180,140,30,0.10) 21px), linear-gradient(175deg, ${note.color} 0%, #fffbe8 100%)`;
       card.style.marginLeft = OFFSETS[idx % OFFSETS.length];
 
-      // ── Delete × ────────────────────────────────────────────────────────
-      const deleteIcon = document.createElement('button');
-      deleteIcon.type = 'button';
-      deleteIcon.title = 'Delete note';
-      deleteIcon.className = [
-        'sticky-delete-btn absolute top-1.5 right-1.5',
-        'w-5 h-5 flex items-center justify-center rounded',
-        'text-amber-700/60 hover:text-red-600 hover:bg-red-100/70',
-        'opacity-0 transition-all duration-100',
-      ].join(' ');
-      deleteIcon.innerHTML = `<svg class="w-3 h-3 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/>
-      </svg>`;
-      deleteIcon.addEventListener('click', (e) => {
-        e.stopPropagation();
-        workingNotes = workingNotes.filter((n) => n.id !== note.id);
-        renderNotes();
-        queueSave();
-      });
-
-      // ── Fold corner ──────────────────────────────────────────────────────
-      const fold = document.createElement('div');
-      fold.className = 'sticky-fold-corner pointer-events-none';
-      card.appendChild(fold);
-      card.appendChild(deleteIcon);
-
-      card.addEventListener('mouseenter', () => deleteIcon.classList.remove('opacity-0'));
-      card.addEventListener('mouseleave', () => deleteIcon.classList.add('opacity-0'));
-      card.addEventListener('click', (e) => {
-        if (e.target !== deleteIcon && !deleteIcon.contains(e.target)) bodyInput.focus();
-      });
-
-      // ── Creator avatar (org boards only) ─────────────────────────────────
-      let avatarEl = null;
-      if (isOrgBoard && note.createdBy) {
-        avatarEl = document.createElement('div');
-        avatarEl.className = 'w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0';
-        avatarEl.style.background = _uidToColor(note.createdBy);
-        avatarEl.textContent = '…';
-
-        // Resolve profile async
-        getUserProfile(note.createdBy).then((profile) => {
-          if (!profile) { avatarEl.textContent = '?'; return; }
-          if (profile.photoURL) {
-            avatarEl.innerHTML = '';
-            avatarEl.style.background = '';
-            const img = document.createElement('img');
-            img.src = profile.photoURL;
-            img.alt = profile.displayName || '';
-            img.title = profile.displayName || profile.email || '';
-            img.className = 'w-5 h-5 rounded-full object-cover border border-gray-200';
-            avatarEl.appendChild(img);
-          } else {
-            const initials = (profile.displayName || profile.username || '?').split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
-            avatarEl.textContent = initials;
-            avatarEl.title = profile.displayName || profile.email || '';
-          }
-        }).catch(() => { avatarEl.textContent = '?'; });
-      }
-
-      // ── Editable textarea (all notes editable) ───────────────────────────
-      const bodyInput = document.createElement('textarea');
-      bodyInput.rows = 3;
-      bodyInput.maxLength = 1200;
-      bodyInput.placeholder = 'Write a quick note...';
-      bodyInput.className = 'flex-1 min-w-0 text-xs placeholder-amber-700/60 border-0 outline-none p-1 resize-none focus:ring-0 cursor-text';
-      bodyInput.value = note.body;
-      bodyInput.style.overflowY = 'hidden';
-      bodyInput.style.caretColor = '#000';
-      bodyInput.style.color = '#3b1a08';
-      bodyInput.style.backgroundColor = 'transparent';
-      bodyInput.style.webkitTextFillColor = '#3b1a08';
-      bodyInput.addEventListener('input', () => {
-        note.body = bodyInput.value;
-        note.updatedAt = Date.now();
-        // Grow textarea without collapsing height first (avoids killing caret).
-        const sh = bodyInput.scrollHeight;
-        if (bodyInput.offsetHeight < sh) {
-          bodyInput.style.height = `${sh}px`;
+      const bodyInput = card.querySelector('.sticky-note-body');
+      if (bodyInput) {
+        bodyInput.dataset.stickyNoteBodyId = note.id;
+        if (document.activeElement !== bodyInput && bodyInput.value !== note.body) {
+          bodyInput.value = note.body;
         }
-        queueSave();
-      });
-
-      // Wrap avatar + textarea in a flex row so text starts right of bubble
-      if (avatarEl) {
-        const row = document.createElement('div');
-        row.className = 'flex items-start gap-1.5';
-        row.appendChild(avatarEl);
-        row.appendChild(bodyInput);
-        card.appendChild(row);
-      } else {
-        card.appendChild(bodyInput);
       }
-      stackViewport.appendChild(card);
+
+      if (!prevCard) {
+        if (stackViewport.firstElementChild !== card) {
+          stackViewport.insertBefore(card, stackViewport.firstElementChild);
+        }
+      } else if (prevCard.nextElementSibling !== card) {
+        stackViewport.insertBefore(card, prevCard.nextElementSibling);
+      }
+      prevCard = card;
     });
 
-    notesWrap.appendChild(stackViewport);
+    [...stackViewport.querySelectorAll('article[data-sticky-note-id]')].forEach((el) => {
+      if (!desiredIds.has(el.dataset.stickyNoteId)) el.remove();
+    });
+
+    if (!notesWrap.contains(stackViewport)) notesWrap.appendChild(stackViewport);
 
     // Measure heights now that elements are in the live DOM (fixes delete + initial load).
     requestAnimationFrame(() => {

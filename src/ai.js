@@ -20,7 +20,6 @@ import { httpsCallable } from 'firebase/functions';
 import { functions }     from './firebase.js';
 import { createCard }    from './cards.js';
 import { getBoardId }    from './board.js';
-import { consumeAiCredit } from './billing.js';
 
 // ─── Callable references ──────────────────────────────────────────────────────
 // Instantiated once at module load — httpsCallable is cheap (no network call).
@@ -48,8 +47,6 @@ const _generateBoardWithTasksFn  = httpsCallable(functions, 'generateBoardWithTa
  */
 export async function generateCard(prompt, opts = {}) {
   if (!prompt?.trim()) throw new Error('Prompt must not be empty.');
-  const metered = opts?.metered !== false;
-  if (metered) await consumeAiCredit(auth_uid_safe());
 
   const result = await _generateCardFn({ prompt: prompt.trim() });
 
@@ -69,8 +66,6 @@ export async function generateCard(prompt, opts = {}) {
  */
 export async function generateBoard(prompt, opts = {}) {
   if (!prompt?.trim()) throw new Error('Prompt must not be empty.');
-  const metered = opts?.metered !== false;
-  if (metered) await consumeAiCredit(auth_uid_safe());
   const result = await _generateBoardFn({ prompt: prompt.trim() });
   const { title, columns } = result.data;
   if (typeof title !== 'string' || !title || !Array.isArray(columns)) {
@@ -88,8 +83,6 @@ export async function generateBoard(prompt, opts = {}) {
  */
 export async function generateBoardWithTasks(prompt, opts = {}) {
   if (!prompt?.trim()) throw new Error('Prompt must not be empty.');
-  const metered = opts?.metered !== false;
-  if (metered) await consumeAiCredit(auth_uid_safe());
   const result = await _generateBoardWithTasksFn({ prompt: prompt.trim() });
   const { title, columns } = result.data;
   if (typeof title !== 'string' || !title || !Array.isArray(columns)) {
@@ -204,8 +197,3 @@ function _bindModalSubmitKeys(form) {
   });
 }
 
-function auth_uid_safe() {
-  const uid = window.__PMDEK_UID || '';
-  if (!uid) throw new Error('User session not ready for AI request.');
-  return uid;
-}
